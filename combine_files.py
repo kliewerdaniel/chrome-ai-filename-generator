@@ -7,7 +7,7 @@ def combine_files_in_directory(output_file="combined_output.txt", ignore_dirs=No
     Directories in `ignore_dirs` will be skipped.
     """
     if ignore_dirs is None:
-        ignore_dirs = ["venv", "node_modules"]  # Default to ignoring 'venv'
+        ignore_dirs = ["venv", "node_modules", "chrome-ai-filename-generator"]  # Default to ignoring 'venv'
 
     with open(output_file, "w", encoding="utf-8") as outfile:
         for root, dirs, files in os.walk(os.getcwd()):

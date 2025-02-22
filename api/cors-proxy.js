@@ -7,6 +7,12 @@ import fetch from 'node-fetch';
 const app = express();
 const port = 11435;
 
+// Update the Express JSON middleware to handle larger payloads
+app.use(express.json({ limit: '50mb' })); // Increased from default 100kb
+
+// Add URL-encoded body parser with larger limit
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],

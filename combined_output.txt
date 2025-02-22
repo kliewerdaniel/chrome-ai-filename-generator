@@ -12,24 +12,140 @@ class ProxyManager {
             try {
                 // First check if proxy server is running
                 const proxyCheck = await fetch(`${this.proxyUrl}/api/version`).catch(() => null);
+                
                 if (!proxyCheck) {
-                    throw new Error('Proxy server not running. Please start it with: cd api && node cors-proxy.js');
+                    console.log('Attempting to start proxy server...');
+                    try {
+                        // First try native messaging
+                        await this.startViaNativeMessaging();
+                    } catch (nativeError) {
+                        console.log('Native messaging failed, trying direct start...', nativeError);
+                        await this.startDirectProxy();
+                    }
                 }
-
-                // Then check if Ollama is accessible directly
-                const ollamaCheck = await fetch(`${this.ollamaUrl}/api/version`).catch(() => null);
-                if (!ollamaCheck) {
-                    throw new Error('Cannot connect to Ollama. Please ensure it is running.');
-                }
-
+                
                 this.isRunning = true;
-                console.log('Connected to Ollama');
             } catch (error) {
-                console.error('Failed to connect:', error);
-                throw error;
+                console.error('Proxy startup failed:', error);
+                throw new Error(`Could not establish connection: ${error.message}`);
             }
         }
     }
+
+    async startViaNativeMessaging() {
+        const startResponse = await chrome.runtime.sendMessage({ 
+            action: 'startProxy' 
+        });
+        
+        if (startResponse.error) {
+            throw new Error('Native messaging failed: ' + startResponse.error);
+        }
+
+        await this.waitForProxyStart();
+    }
+
+    async startDirectProxy() {
+        try {
+            // Try to start proxy using native messaging
+            const response = await new Promise((resolve, reject) => {
+                try {
+                    const port = chrome.runtime.connectNative('com.ollama.proxy');
+                    let timeoutId;
+                    
+                    port.onMessage.addListener((message) => {
+                        console.log('Proxy message:', message);
+                        if (message.success) {
+                            clearTimeout(timeoutId);
+                            resolve(message);
+                        } else if (message.error) {
+                            clearTimeout(timeoutId);
+                            reject(new Error(message.error));
+                        }
+                    });
+                    
+                    port.onDisconnect.addListener(() => {
+                        const error = chrome.runtime.lastError;
+                        if (error) {
+                            console.error('Proxy disconnected:', error);
+                            reject(new Error(error.message));
+                        }
+                    });
+                    
+                    // Set timeout for response
+                    timeoutId = setTimeout(() => {
+                        port.disconnect();
+                        reject(new Error('Proxy connection timed out'));
+                    }, 5000);
+                    
+                    // Send start command
+                    port.postMessage({ 
+                        command: 'start',
+                        script: 'cors-proxy.js'
+                    });
+                } catch (err) {
+                    reject(err);
+                }
+            });
+
+            // If we got a successful response, wait for the proxy to be available
+            if (response.success) {
+                await this.waitForProxyStart();
+                return true;
+            }
+            
+            throw new Error('Failed to get success response from proxy');
+        } catch (error) {
+            console.error('Direct proxy start error:', error);
+            
+            // Try alternative method - execute via native host
+            try {
+                const response = await new Promise((resolve, reject) => {
+                    chrome.runtime.sendNativeMessage('com.ollama.proxy',
+                        { 
+                            command: 'execute',
+                            script: 'cors-proxy.js'
+                        },
+                        (response) => {
+                            if (chrome.runtime.lastError) {
+                                reject(new Error(chrome.runtime.lastError.message));
+                            } else if (!response || response.error) {
+                                reject(new Error(response?.error || 'No response from proxy'));
+                            } else {
+                                resolve(response);
+                            }
+                        }
+                    );
+                });
+
+                // If we got a successful response, wait for the proxy to be available
+                if (response.success) {
+                    await this.waitForProxyStart();
+                    return true;
+                }
+                
+                throw new Error('Failed to get success response from proxy');
+            } catch (nativeError) {
+                throw new Error(`Direct proxy start failed: ${error.message}. Native messaging also failed: ${nativeError.message}`);
+            }
+        }
+    }
+    
+    async waitForProxyStart(retries = 10, delay = 500) {
+        for (let i = 0; i < retries; i++) {
+            try {
+                const check = await fetch(`${this.proxyUrl}/api/version`);
+                if (check.ok) {
+                    console.log('Proxy server is now running');
+                    return true;
+                }
+            } catch (e) {
+                console.log(`Waiting for proxy server (attempt ${i + 1}/${retries})...`);
+            }
+            await new Promise(r => setTimeout(r, delay));
+        }
+        throw new Error('Proxy server did not start within expected time');
+    }
+    
 
     async stopProxy() {
         if (this.isRunning) {
@@ -193,6 +309,311 @@ export class ProxyServer {
 --- /Users/danielkliewer/chrome-ai-filename-generator/.DS_Store (ERROR: 'utf-8' codec can't decode byte 0xff in position 1066: invalid start byte) ---
 
 --- /Users/danielkliewer/chrome-ai-filename-generator/combined_output.txt ---
+--- /Users/danielkliewer/chrome-ai-filename-generator/proxy-manager.js ---
+// proxy-manager.js
+class ProxyManager {
+    constructor() {
+        this.isRunning = false;
+        this.proxyUrl = 'http://localhost:11435';
+        this.ollamaUrl = 'http://localhost:11434';
+    }
+
+    async startProxy() {
+        if (!this.isRunning) {
+            try {
+                // First check if proxy server is running
+                const proxyCheck = await fetch(`${this.proxyUrl}/api/version`).catch(() => null);
+                
+                if (!proxyCheck) {
+                    console.log('Attempting to start proxy server...');
+                    try {
+                        // First try native messaging
+                        await this.startViaNativeMessaging();
+                    } catch (nativeError) {
+                        console.log('Native messaging failed, trying direct start...', nativeError);
+                        await this.startDirectProxy();
+                    }
+                }
+                
+                this.isRunning = true;
+            } catch (error) {
+                console.error('Proxy startup failed:', error);
+                throw new Error(`Could not establish connection: ${error.message}`);
+            }
+        }
+    }
+
+    async startViaNativeMessaging() {
+        const startResponse = await chrome.runtime.sendMessage({ 
+            action: 'startProxy' 
+        });
+        
+        if (startResponse.error) {
+            throw new Error('Native messaging failed: ' + startResponse.error);
+        }
+
+        await this.waitForProxyStart();
+    }
+
+    async startDirectProxy() {
+        try {
+            // Try to start proxy using native messaging
+            const response = await new Promise((resolve, reject) => {
+                try {
+                    const port = chrome.runtime.connectNative('com.ollama.proxy');
+                    let timeoutId;
+                    
+                    port.onMessage.addListener((message) => {
+                        console.log('Proxy message:', message);
+                        if (message.success) {
+                            clearTimeout(timeoutId);
+                            resolve(message);
+                        } else if (message.error) {
+                            clearTimeout(timeoutId);
+                            reject(new Error(message.error));
+                        }
+                    });
+                    
+                    port.onDisconnect.addListener(() => {
+                        const error = chrome.runtime.lastError;
+                        if (error) {
+                            console.error('Proxy disconnected:', error);
+                            reject(new Error(error.message));
+                        }
+                    });
+                    
+                    // Set timeout for response
+                    timeoutId = setTimeout(() => {
+                        port.disconnect();
+                        reject(new Error('Proxy connection timed out'));
+                    }, 5000);
+                    
+                    // Send start command
+                    port.postMessage({ 
+                        command: 'start',
+                        script: 'cors-proxy.js'
+                    });
+                } catch (err) {
+                    reject(err);
+                }
+            });
+
+            // If we got a successful response, wait for the proxy to be available
+            if (response.success) {
+                await this.waitForProxyStart();
+                return true;
+            }
+            
+            throw new Error('Failed to get success response from proxy');
+        } catch (error) {
+            console.error('Direct proxy start error:', error);
+            
+            // Try alternative method - execute via native host
+            try {
+                const response = await new Promise((resolve, reject) => {
+                    chrome.runtime.sendNativeMessage('com.ollama.proxy',
+                        { 
+                            command: 'execute',
+                            script: 'cors-proxy.js'
+                        },
+                        (response) => {
+                            if (chrome.runtime.lastError) {
+                                reject(new Error(chrome.runtime.lastError.message));
+                            } else if (!response || response.error) {
+                                reject(new Error(response?.error || 'No response from proxy'));
+                            } else {
+                                resolve(response);
+                            }
+                        }
+                    );
+                });
+
+                // If we got a successful response, wait for the proxy to be available
+                if (response.success) {
+                    await this.waitForProxyStart();
+                    return true;
+                }
+                
+                throw new Error('Failed to get success response from proxy');
+            } catch (nativeError) {
+                throw new Error(`Direct proxy start failed: ${error.message}. Native messaging also failed: ${nativeError.message}`);
+            }
+        }
+    }
+    
+    async waitForProxyStart(retries = 10, delay = 500) {
+        for (let i = 0; i < retries; i++) {
+            try {
+                const check = await fetch(`${this.proxyUrl}/api/version`);
+                if (check.ok) {
+                    console.log('Proxy server is now running');
+                    return true;
+                }
+            } catch (e) {
+                console.log(`Waiting for proxy server (attempt ${i + 1}/${retries})...`);
+            }
+            await new Promise(r => setTimeout(r, delay));
+        }
+        throw new Error('Proxy server did not start within expected time');
+    }
+    
+
+    async stopProxy() {
+        if (this.isRunning) {
+            this.isRunning = false;
+            console.log('Proxy stopped');
+        }
+    }
+
+    isProxyRunning() {
+        return this.isRunning;
+    }
+
+    async proxyFetch(url, options = {}) {
+        if (!this.isRunning) {
+            await this.startProxy().catch(() => {});
+        }
+
+        try {
+            // Parse and reconstruct the URL
+            const urlObj = new URL(url);
+            const path = urlObj.pathname;
+            const proxyUrl = new URL(path, this.proxyUrl).toString();
+            
+            console.log('Making request to proxy:', proxyUrl);
+            
+            const enhancedOptions = {
+                ...options,
+                headers: {
+                    ...options.headers,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                mode: 'cors',
+                credentials: 'omit'
+            };
+
+            const response = await fetch(proxyUrl, enhancedOptions);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Proxy response error:', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    body: errorText
+                });
+                throw new Error(`HTTP error! status: ${response.status}, message: ${errorText || response.statusText}`);
+            }
+            
+            return response;
+        } catch (error) {
+            console.error('Proxy fetch error:', {
+                url: url,
+                error: error.message,
+                stack: error.stack
+            });
+
+            this.isRunning = false;
+            throw new Error('Lost connection to proxy server. Please ensure both proxy and Ollama are running.');
+        }
+    }
+}
+
+export const proxyManager = new ProxyManager();
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/proxy-server.js ---
+// proxy-server.js
+export class ProxyServer {
+    constructor() {
+        this.server = null;
+    }
+
+    async start() {
+        // Create a local server
+        this.server = await chrome.system.network.createTCPServer({
+            address: '127.0.0.1',
+            port: 11435,
+            backlog: 5
+        });
+
+        // Handle incoming connections
+        this.server.onAccept.addListener(async (info) => {
+            const socket = info.clientSocket;
+            
+            // Read request
+            const data = await this.readSocket(socket);
+            const request = this.parseRequest(data);
+
+            // Forward to Ollama
+            const response = await fetch('http://localhost:11434' + request.path, {
+                method: request.method,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: request.body
+            });
+
+            // Send response with CORS headers
+            const responseBody = await response.text();
+            const corsHeaders = {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Content-Type': 'application/json'
+            };
+
+            const responseText = [
+                'HTTP/1.1 ' + response.status + ' ' + response.statusText,
+                ...Object.entries(corsHeaders).map(([k, v]) => `${k}: ${v}`),
+                '',
+                responseBody
+            ].join('\r\n');
+
+            await this.writeSocket(socket, responseText);
+            socket.disconnect();
+        });
+
+        // Start listening
+        await this.server.listen();
+        console.log('Proxy server started on port 11435');
+    }
+
+    async stop() {
+        if (this.server) {
+            await this.server.disconnect();
+            this.server = null;
+            console.log('Proxy server stopped');
+        }
+    }
+
+    async readSocket(socket) {
+        return new Promise((resolve, reject) => {
+            let data = '';
+            socket.onData.addListener((info) => {
+                data += new TextDecoder().decode(info.data);
+                if (data.includes('\r\n\r\n')) {
+                    resolve(data);
+                }
+            });
+            socket.onError.addListener(reject);
+        });
+    }
+
+    async writeSocket(socket, data) {
+        return new Promise((resolve, reject) => {
+            socket.write(new TextEncoder().encode(data), resolve);
+            socket.onError.addListener(reject);
+        });
+    }
+
+    parseRequest(data) {
+        const [headers, body] = data.split('\r\n\r\n');
+        const [firstLine, ...headerLines] = headers.split('\r\n');
+        const [method, path] = firstLine.split(' ');
+        return { method, path, body };
+    }
+}
 
 
 --- /Users/danielkliewer/chrome-ai-filename-generator/INSTALL.md ---
@@ -427,7 +848,7 @@ def combine_files_in_directory(output_file="combined_output.txt", ignore_dirs=No
     Directories in `ignore_dirs` will be skipped.
     """
     if ignore_dirs is None:
-        ignore_dirs = ["venv", "node_modules"]  # Default to ignoring 'venv'
+        ignore_dirs = ["venv", "node_modules", "chrome-ai-filename-generator"]  # Default to ignoring 'venv'
 
     with open(output_file, "w", encoding="utf-8") as outfile:
         for root, dirs, files in os.walk(os.getcwd()):
@@ -496,7 +917,8 @@ if __name__ == "__main__":
         "notifications",
         "tabs",
         "declarativeNetRequestWithHostAccess",
-        "activeTab"
+        "activeTab",
+        "nativeMessaging"
     ],
     "content_security_policy": {
         "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:11434/ http://localhost:11435/ https://* http://* data:;"
@@ -541,7 +963,38 @@ if __name__ == "__main__":
 import { proxyManager } from './proxy-manager.js';
 
 const OLLAMA_ENDPOINT = "http://localhost:11435/api/generate";
-
+// Improved native messaging handler
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'startProxy') {
+        chrome.runtime.sendNativeMessage('com.ollama.proxy',
+            { 
+                command: 'start',
+                path: chrome.runtime.getURL('api/cors-proxy.js')
+            },
+            (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error('Native messaging error:', chrome.runtime.lastError);
+                    const errorMsg = chrome.runtime.lastError.message;
+                    if (errorMsg.includes('native messaging host not found')) {
+                        sendResponse({ 
+                            error: 'Native messaging host not found. Please ensure you ran install.sh and restarted Chrome.' 
+                        });
+                    } else {
+                        sendResponse({ error: errorMsg });
+                    }
+                } else if (!response) {
+                    sendResponse({ 
+                        error: 'No response from native messaging host. Please check if the proxy is installed correctly.' 
+                    });
+                } else {
+                    sendResponse(response);
+                }
+            }
+        );
+        return true; // Keep message channel open
+    }
+    // ... existing handlers
+});
 // Create context menu items
 function createContextMenus() {
     // Remove existing items
@@ -742,27 +1195,47 @@ async function generateFilename(imageUrl) {
     }
 }
 
-// Check Ollama status with improved error handling
+// Enhanced Ollama status check with comprehensive diagnostics
 async function checkOllamaStatus() {
+    const checks = {
+        direct: false,
+        proxy: false,
+        model: false
+    };
+    
     try {
-        // Check if Ollama is running
-        const healthCheck = await (proxyManager.isProxyRunning()
-            ? proxyManager.proxyFetch('http://localhost:11434/api/version')
-            : fetch('http://localhost:11434/api/version'));
-        
-        if (!healthCheck.ok) {
-            return { 
-                status: 'error', 
-                message: 'Cannot connect to Ollama. Please ensure it is running.' 
+        // First check direct connection
+        try {
+            const directCheck = await fetch('http://localhost:11434/api/version');
+            if (directCheck.ok) {
+                checks.direct = true;
+            }
+        } catch (directError) {
+            console.log('Direct connection failed:', directError);
+        }
+
+        // Then check proxy connection
+        try {
+            const proxyCheck = await proxyManager.proxyFetch('http://localhost:11434/api/version');
+            if (proxyCheck.ok) {
+                checks.proxy = true;
+            }
+        } catch (proxyError) {
+            console.log('Proxy connection failed:', proxyError);
+        }
+
+        // If neither connection method works
+        if (!checks.direct && !checks.proxy) {
+            return {
+                status: 'error',
+                message: 'Cannot connect to Ollama directly or via proxy. Please ensure Ollama is running: ollama serve'
             };
         }
 
-        // Check if LLaVa model is available
+        // Check LLaVa model availability
         const modelCheckOptions = {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model: 'llava:latest',
                 prompt: 'test',
@@ -770,27 +1243,46 @@ async function checkOllamaStatus() {
             })
         };
 
-        const modelCheck = await (proxyManager.isProxyRunning()
-            ? proxyManager.proxyFetch(OLLAMA_ENDPOINT, modelCheckOptions)
-            : fetch(OLLAMA_ENDPOINT, modelCheckOptions));
+        try {
+            const modelCheck = await (checks.proxy 
+                ? proxyManager.proxyFetch(OLLAMA_ENDPOINT, modelCheckOptions)
+                : fetch(OLLAMA_ENDPOINT, modelCheckOptions));
 
-        if (modelCheck.ok) {
-            return { status: 'ok', message: 'Ollama is running and LLaVa model is available' };
-        }
+            if (modelCheck.ok) {
+                checks.model = true;
+                return {
+                    status: 'ok',
+                    message: 'Ollama is running and LLaVa model is available',
+                    checks
+                };
+            }
 
-        if (modelCheck.status === 404) {
-            return { status: 'error', message: 'LLaVa model not found. Please run: ollama pull llava:latest' };
+            if (modelCheck.status === 404) {
+                return {
+                    status: 'error',
+                    message: 'LLaVa model not found. Please run: ollama pull llava:latest',
+                    checks
+                };
+            }
+
+            const errorData = await modelCheck.text();
+            return {
+                status: 'error',
+                message: `Ollama model error: ${errorData || modelCheck.statusText}`,
+                checks
+            };
+        } catch (modelError) {
+            return {
+                status: 'error',
+                message: 'Failed to check LLaVa model. Please verify Ollama installation.',
+                checks
+            };
         }
-        
-        const errorData = await modelCheck.text();
-        return { 
-            status: 'error', 
-            message: `Ollama error: ${errorData || modelCheck.statusText}. Please ensure the llava model is installed.` 
-        };
     } catch (error) {
-        return { 
-            status: 'error', 
-            message: 'Cannot connect to Ollama. Please ensure it is running and accessible.' 
+        return {
+            status: 'error',
+            message: `Connection check failed: ${error.message}`,
+            checks
         };
     }
 }
@@ -1192,8 +1684,28 @@ app.listen(port, () => {
 --- /Users/danielkliewer/chrome-ai-filename-generator/api/install.sh ---
 #!/bin/bash
 
+set -e # Exit on any error
+
+# Function to check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Check prerequisites
+if ! command_exists node; then
+    echo "Error: Node.js is not installed. Please install Node.js first."
+    exit 1
+fi
+
+if ! command_exists npm; then
+    echo "Error: npm is not installed. Please install npm first."
+    exit 1
+fi
+
 # Get the absolute path of the script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+echo "Setting up native messaging host..."
 
 # Make scripts executable
 chmod +x "$SCRIPT_DIR/proxy-host.js"
@@ -1201,26 +1713,149 @@ chmod +x "$SCRIPT_DIR/cors-proxy.js"
 
 # Create native messaging host manifest directory if it doesn't exist
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS
-    MANIFEST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+    # Try both Chrome and Chromium locations on macOS
+    CHROME_MANIFEST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+    CHROMIUM_MANIFEST_DIR="$HOME/Library/Application Support/Chromium/NativeMessagingHosts"
+    
+    # Create both directories
+    mkdir -p "$CHROME_MANIFEST_DIR"
+    mkdir -p "$CHROMIUM_MANIFEST_DIR"
+    
+    # Set permissions
+    chmod 755 "$CHROME_MANIFEST_DIR"
+    chmod 755 "$CHROMIUM_MANIFEST_DIR"
+    
+    # Use Chrome directory as primary
+    MANIFEST_DIR="$CHROME_MANIFEST_DIR"
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    # Linux
-    MANIFEST_DIR="$HOME/.config/google-chrome/NativeMessagingHosts"
+    # Linux paths
+    CHROME_MANIFEST_DIR="$HOME/.config/google-chrome/NativeMessagingHosts"
+    CHROMIUM_MANIFEST_DIR="$HOME/.config/chromium/NativeMessagingHosts"
+    
+    # Create both directories
+    mkdir -p "$CHROME_MANIFEST_DIR"
+    mkdir -p "$CHROMIUM_MANIFEST_DIR"
+    
+    # Set permissions
+    chmod 755 "$CHROME_MANIFEST_DIR"
+    chmod 755 "$CHROMIUM_MANIFEST_DIR"
+    
+    # Use Chrome directory as primary
+    MANIFEST_DIR="$CHROME_MANIFEST_DIR"
+else
+    echo "Error: Unsupported operating system"
+    exit 1
 fi
 
-mkdir -p "$MANIFEST_DIR"
+# Function to install manifest
+install_manifest() {
+    local dir="$1"
+    echo "Installing manifest in $dir..."
+    
+    # Create manifest with absolute paths
+    cat > "$dir/com.ollama.proxy.json" << EOL
+{
+  "name": "com.ollama.proxy",
+  "description": "Native messaging host for Ollama CORS proxy",
+  "path": "$SCRIPT_DIR/proxy-host.js",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://*"
+  ]
+}
+EOL
+    
+    # Set proper permissions
+    chmod 644 "$dir/com.ollama.proxy.json"
+    
+    # Verify manifest content
+    if ! grep -q "\"path\": \"$SCRIPT_DIR/proxy-host.js\"" "$dir/com.ollama.proxy.json"; then
+        echo "Error: Manifest file in $dir does not contain correct absolute path"
+        return 1
+    fi
+    
+    echo "✅ Manifest installed successfully in $dir"
+    return 0
+}
 
-# Update manifest path to point to the proxy host script
-MANIFEST_CONTENT=$(cat "$SCRIPT_DIR/com.ollama.proxy.json" | sed "s|\"path\": \"proxy-host.js\"|\"path\": \"$SCRIPT_DIR/proxy-host.js\"|")
+# Install manifest in all possible locations
+echo "Installing manifest in all possible locations..."
 
-# Write updated manifest to the correct location
-echo "$MANIFEST_CONTENT" > "$MANIFEST_DIR/com.ollama.proxy.json"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    install_manifest "$CHROME_MANIFEST_DIR" || exit 1
+    install_manifest "$CHROMIUM_MANIFEST_DIR" || exit 1
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    install_manifest "$CHROME_MANIFEST_DIR" || exit 1
+    install_manifest "$CHROMIUM_MANIFEST_DIR" || exit 1
+fi
+
+echo "Installing Node.js dependencies..."
 
 # Install Node.js dependencies
 cd "$SCRIPT_DIR"
-npm install express cors node-fetch @modelcontextprotocol/sdk
+if ! npm install express cors node-fetch @modelcontextprotocol/sdk; then
+    echo "Error: Failed to install Node.js dependencies"
+    exit 1
+fi
 
-echo "Native messaging host installed successfully!"
+# Verify installation
+echo "Verifying installation..."
+
+# Check if manifest file exists and is readable
+if [ ! -r "$MANIFEST_DIR/com.ollama.proxy.json" ]; then
+    echo "Error: Manifest file not found or not readable"
+    exit 1
+fi
+
+# Check if proxy scripts are executable
+if [ ! -x "$SCRIPT_DIR/proxy-host.js" ] || [ ! -x "$SCRIPT_DIR/cors-proxy.js" ]; then
+    echo "Error: Proxy scripts are not executable"
+    exit 1
+fi
+
+# Test proxy host script
+echo "Testing proxy host script..."
+
+# Function to test proxy host
+test_proxy_host() {
+    # Create test message
+    TEST_INPUT='{"command":"execute","script":"cors-proxy.js"}'
+    TEST_LEN=${#TEST_INPUT}
+
+    # Send test message to proxy host
+    (
+        # Write message length as 32-bit LE integer
+        printf "\\x$(printf %x $TEST_LEN)\\x00\\x00\\x00"
+        # Write message content
+        printf "%s" "$TEST_INPUT"
+    ) | node "$SCRIPT_DIR/proxy-host.js" > /dev/null 2>&1 &
+    PROXY_PID=$!
+
+    # Wait for proxy to start
+    echo "Waiting for proxy to start..."
+    for i in {1..5}; do
+        if curl -s http://localhost:11435/api/version > /dev/null; then
+            echo "✅ Proxy started successfully"
+            kill $PROXY_PID 2>/dev/null
+            wait $PROXY_PID 2>/dev/null
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo "❌ Failed to start proxy"
+    kill $PROXY_PID 2>/dev/null
+    wait $PROXY_PID 2>/dev/null
+    return 1
+}
+
+if ! test_proxy_host; then
+    echo "Error: Proxy host test failed"
+    exit 1
+fi
+
+echo "✅ Native messaging host installed successfully!"
+echo "Please restart Chrome for the changes to take effect."
 
 
 --- /Users/danielkliewer/chrome-ai-filename-generator/api/llava_integration.js ---
@@ -1284,66 +1919,106 @@ let proxyProcess = null;
 
 // Function to read messages from Chrome
 function readMessage() {
-    const header = Buffer.alloc(4);
     return new Promise((resolve, reject) => {
-        process.stdin.read(4, (err, bytes) => {
-            if (err) {
-                reject(err);
-                return;
-            }
-            if (bytes === null) {
-                resolve(null);
-                return;
-            }
-            const size = bytes.readUInt32LE(0);
-            process.stdin.read(size, (err, data) => {
-                if (err) {
-                    reject(err);
-                    return;
+        let buffer = Buffer.alloc(0);
+        
+        process.stdin.on('readable', () => {
+            let chunk;
+            while (null !== (chunk = process.stdin.read())) {
+                buffer = Buffer.concat([buffer, chunk]);
+                
+                // Need at least 4 bytes for the message length
+                if (buffer.length < 4) continue;
+                
+                const messageLength = buffer.readUInt32LE(0);
+                const totalLength = messageLength + 4;
+                
+                // Wait for the complete message
+                if (buffer.length < totalLength) continue;
+                
+                const messageBuffer = buffer.slice(4, totalLength);
+                buffer = buffer.slice(totalLength); // Keep any remaining data
+                
+                try {
+                    const message = JSON.parse(messageBuffer.toString());
+                    resolve(message);
+                } catch (error) {
+                    reject(new Error('Invalid message format'));
                 }
-                resolve(JSON.parse(data.toString()));
-            });
+            }
+        });
+        
+        process.stdin.on('end', () => {
+            resolve(null);
+        });
+        
+        process.stdin.on('error', (error) => {
+            reject(error);
         });
     });
 }
 
 // Function to write messages to Chrome
 function sendMessage(message) {
-    const json = JSON.stringify(message);
-    const header = Buffer.alloc(4);
-    header.writeUInt32LE(json.length, 0);
-    process.stdout.write(header);
-    process.stdout.write(json);
+    try {
+        const json = JSON.stringify(message);
+        const buffer = Buffer.from(json);
+        
+        const header = Buffer.alloc(4);
+        header.writeUInt32LE(buffer.length, 0);
+        
+        process.stdout.write(header);
+        process.stdout.write(buffer);
+    } catch (error) {
+        console.error('Error sending message:', error);
+    }
 }
 
 // Handle messages from Chrome
 async function handleMessage(message) {
     try {
-        if (message.command === 'start') {
+        if (message.command === 'start' || message.command === 'execute') {
             if (proxyProcess) {
                 sendMessage({ error: 'Proxy server is already running' });
                 return;
             }
 
-            const scriptPath = resolve(__dirname, message.script);
+            const scriptPath = resolve(__dirname, message.script || 'cors-proxy.js');
             proxyProcess = spawn('node', [scriptPath], {
                 stdio: ['ignore', 'pipe', 'pipe']
             });
 
             proxyProcess.stdout.on('data', (data) => {
                 console.log(`Proxy stdout: ${data}`);
+                sendMessage({ log: data.toString() });
             });
 
             proxyProcess.stderr.on('data', (data) => {
                 console.error(`Proxy stderr: ${data}`);
+                sendMessage({ error: data.toString() });
             });
 
             proxyProcess.on('close', (code) => {
                 console.log(`Proxy process exited with code ${code}`);
                 proxyProcess = null;
+                if (code !== 0) {
+                    sendMessage({ error: `Proxy process exited with code ${code}` });
+                }
             });
 
-            sendMessage({ success: true });
+            // Add error handler
+            proxyProcess.on('error', (error) => {
+                console.error('Failed to start proxy process:', error);
+                sendMessage({ error: `Failed to start proxy: ${error.message}` });
+                proxyProcess = null;
+            });
+
+            // Wait briefly to catch immediate startup errors
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            if (proxyProcess) {
+                sendMessage({ success: true });
+            }
         } else if (message.command === 'stop') {
             if (proxyProcess) {
                 proxyProcess.kill();
@@ -1361,22 +2036,34 @@ async function handleMessage(message) {
 // Main loop
 async function main() {
     try {
-        process.stdin.on('readable', async () => {
-            const message = await readMessage();
-            if (message) {
-                await handleMessage(message);
-            }
-        });
-
-        process.stdin.on('end', () => {
-            if (proxyProcess) {
-                proxyProcess.kill();
-            }
+        // Handle command line test flag
+        if (process.argv.includes('--test')) {
+            console.log('Testing native messaging host...');
+            sendMessage({ success: true, message: 'Native messaging host is working' });
             process.exit(0);
-        });
+        }
+
+        // Process messages in a loop
+        while (true) {
+            try {
+                const message = await readMessage();
+                if (!message) break; // End of input
+                
+                console.log('Received message:', message);
+                await handleMessage(message);
+            } catch (error) {
+                console.error('Error processing message:', error);
+                sendMessage({ error: error.message });
+            }
+        }
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Fatal error:', error);
         process.exit(1);
+    } finally {
+        // Cleanup
+        if (proxyProcess) {
+            proxyProcess.kill();
+        }
     }
 }
 
@@ -1387,7 +2074,7 @@ main();
 {
   "name": "com.ollama.proxy",
   "description": "Native messaging host for Ollama CORS proxy",
-  "path": "proxy-host.js",
+  "path": "/Users/danielkliewer/chrome-ai-filename-generator/api/proxy-host.js",
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://*"
@@ -1397,18 +2084,62 @@ main();
 
 --- /Users/danielkliewer/chrome-ai-filename-generator/api/package-lock.json ---
 {
-  "name": "ollama-proxy",
+  "name": "ollama-cors-proxy",
   "version": "1.0.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
-      "name": "ollama-proxy",
+      "name": "ollama-cors-proxy",
       "version": "1.0.0",
       "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.5.0",
         "cors": "^2.8.5",
-        "express": "^4.18.2",
+        "express": "^4.21.2",
         "node-fetch": "^3.3.2"
+      }
+    },
+    "node_modules/@modelcontextprotocol/sdk": {
+      "version": "1.5.0",
+      "resolved": "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.5.0.tgz",
+      "integrity": "sha512-IJ+5iVVs8FCumIHxWqpwgkwOzyhtHVKy45s6Ug7Dv0MfRpaYisH8QQ87rIWeWdOzlk8sfhitZ7HCyQZk7d6b8w==",
+      "license": "MIT",
+      "dependencies": {
+        "content-type": "^1.0.5",
+        "eventsource": "^3.0.2",
+        "raw-body": "^3.0.0",
+        "zod": "^3.23.8",
+        "zod-to-json-schema": "^3.24.1"
+      },
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/@modelcontextprotocol/sdk/node_modules/iconv-lite": {
+      "version": "0.6.3",
+      "resolved": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.6.3.tgz",
+      "integrity": "sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw==",
+      "license": "MIT",
+      "dependencies": {
+        "safer-buffer": ">= 2.1.2 < 3.0.0"
+      },
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    "node_modules/@modelcontextprotocol/sdk/node_modules/raw-body": {
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/raw-body/-/raw-body-3.0.0.tgz",
+      "integrity": "sha512-RmkhL8CAyCRPXCE28MMH0z2PNWQBNk2Q09ZdxM9IOOXwxwZbN+qbWaatPkdkWIKL2ZVDImrN/pK5HTRz2PcS4g==",
+      "license": "MIT",
+      "dependencies": {
+        "bytes": "3.1.2",
+        "http-errors": "2.0.0",
+        "iconv-lite": "0.6.3",
+        "unpipe": "1.0.0"
+      },
+      "engines": {
+        "node": ">= 0.8"
       }
     },
     "node_modules/accepts": {
@@ -1650,6 +2381,27 @@ main();
       "license": "MIT",
       "engines": {
         "node": ">= 0.6"
+      }
+    },
+    "node_modules/eventsource": {
+      "version": "3.0.5",
+      "resolved": "https://registry.npmjs.org/eventsource/-/eventsource-3.0.5.tgz",
+      "integrity": "sha512-LT/5J605bx5SNyE+ITBDiM3FxffBiq9un7Vx0EwMDM3vg8sWKx/tO2zC+LMqZ+smAM0F2hblaDZUVZF0te2pSw==",
+      "license": "MIT",
+      "dependencies": {
+        "eventsource-parser": "^3.0.0"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    "node_modules/eventsource-parser": {
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/eventsource-parser/-/eventsource-parser-3.0.0.tgz",
+      "integrity": "sha512-T1C0XCUimhxVQzW4zFipdx0SficT651NnkR0ZSH3yQwh+mFMdLfgjABVi4YtMTtaL4s168593DaoaRLMqryavA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18.0.0"
       }
     },
     "node_modules/express": {
@@ -2339,6 +3091,24 @@ main();
       "engines": {
         "node": ">= 8"
       }
+    },
+    "node_modules/zod": {
+      "version": "3.24.2",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-3.24.2.tgz",
+      "integrity": "sha512-lY7CDW43ECgW9u1TcT3IoXHflywfVqDYze4waEz812jR/bZ8FHDsl7pFQoSZTz5N+2NqRXs8GBwnAwo3ZNxqhQ==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/colinhacks"
+      }
+    },
+    "node_modules/zod-to-json-schema": {
+      "version": "3.24.2",
+      "resolved": "https://registry.npmjs.org/zod-to-json-schema/-/zod-to-json-schema-3.24.2.tgz",
+      "integrity": "sha512-pNUqrcSxuuB3/+jBbU8qKUbTbDqYUaG1vf5cXFjbhGgoUuA1amO/y4Q8lzfOhHU8HNPK6VFJ18lBDKj3OHyDsg==",
+      "license": "ISC",
+      "peerDependencies": {
+        "zod": "^3.24.1"
+      }
     }
   }
 }
@@ -2354,8 +3124,9 @@ main();
     "proxy": "node proxy.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "@modelcontextprotocol/sdk": "^1.5.0",
     "cors": "^2.8.5",
+    "express": "^4.21.2",
     "node-fetch": "^3.3.2"
   }
 }

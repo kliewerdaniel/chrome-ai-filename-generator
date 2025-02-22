@@ -10,14 +10,14 @@
         "notifications",
         "tabs",
         "declarativeNetRequestWithHostAccess",
-        "activeTab"
+        "activeTab",
+        "nativeMessaging"
     ],
     "content_security_policy": {
         "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:11434/ http://localhost:11435/ https://* http://* data:;"
     },
     "background": {
-        "service_worker": "service-worker.js",
-        "type": "module"
+        "service_worker": "service-worker.js"
     },
     "host_permissions": [
         "http://localhost:11434/*",
@@ -40,7 +40,7 @@
       }
     },
     "web_accessible_resources": [{
-      "resources": ["proxy-manager.js"],
+      "resources": ["proxy-manager.js", "service-worker.js"],
       "matches": ["<all_urls>"]
     }],
     "content_scripts": [{
