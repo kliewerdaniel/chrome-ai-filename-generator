@@ -2,6 +2,10 @@
 
 A Chrome extension that uses AI (LLaVa) to generate descriptive filenames for images when downloading them. The extension analyzes image content and suggests meaningful filenames based on what it sees.
 
+
+ ![ Alt Text](ss.png) “Alt Text”
+
+
 ## Features
 
 - **Right-Click Menu Integration**
