@@ -329,12 +329,25 @@ chrome.declarativeNetRequest.updateEnabledRulesets({
 // Generate filename using Ollama
 async function generateFilename(imageUrl) {
     try {
-        // Get base64 image data
+        // Get and validate base64 image data
         let imageData;
         try {
             imageData = await fetchImageAsBase64(imageUrl);
+            
+            // Validate base64 data
+            if (!imageData || typeof imageData !== 'string') {
+                throw new Error('Invalid image data received');
+            }
+            
+            // Check if it's actually base64 encoded
+            try {
+                atob(imageData);
+            } catch (e) {
+                throw new Error('Invalid base64 encoding');
+            }
+            
         } catch (error) {
-            throw new Error(`Failed to fetch image: ${error.message}. Please make sure the image URL is accessible.`);
+            throw new Error(`Failed to fetch image: ${error.message}. Please make sure the image URL is accessible and the image format is supported.`);
         }
 
         // Prepare prompt
@@ -525,10 +538,13 @@ async function fetchImageAsBase64(imageUrl) {
         const base64Data = await new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onloadend = () => {
-                const result = reader.result
-                    .split(',')[1]
-                    .slice(0, 30000); // Limit to ~50kb
-                resolve(result);
+                const base64Data = reader.result.split(',')[1];
+                // Check if image data is too large (>10MB)
+                if (base64Data.length > 10 * 1024 * 1024) {
+                    reject(new Error('Image is too large. Please use an image under 10MB.'));
+                    return;
+                }
+                resolve(base64Data);
             };
             reader.onerror = () => reject(new Error('Failed to convert image to base64'));
             reader.readAsDataURL(blob);
