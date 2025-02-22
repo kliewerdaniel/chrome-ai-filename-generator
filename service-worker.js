@@ -140,6 +140,12 @@ class ProxyManager {
                     statusText: response.statusText,
                     body: errorText
                 });
+
+                // Only mark proxy as not running for connection issues
+                if (response.status === 502 || response.status === 503 || response.status === 504) {
+                    this.isRunning = false;
+                }
+
                 throw new Error(`HTTP error! status: ${response.status}, message: ${errorText || response.statusText}`);
             }
             
@@ -151,8 +157,13 @@ class ProxyManager {
                 stack: error.stack
             });
 
-            this.isRunning = false;
-            throw new Error('Lost connection to proxy server. Please ensure both proxy and Ollama are running.');
+            // Only mark proxy as not running for connection issues
+            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                this.isRunning = false;
+                throw new Error('Lost connection to proxy server. Please ensure both proxy and Ollama are running.');
+            }
+
+            throw error;
         }
     }
 }
@@ -163,6 +174,7 @@ const proxyManager = new ProxyManager();
 initialize().catch(error => {
     console.error('Failed to initialize on startup:', error);
 });
+
 // Improved native messaging handler
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'startProxy') {
@@ -195,6 +207,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     // ... existing handlers
 });
+
 // Create context menu items
 function createContextMenus() {
     // Remove existing items
@@ -348,7 +361,7 @@ async function generateFilename(imageUrl) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: 'llava:latest',
+                model: 'llava',
                 prompt: prompt,
                 images: [imageData],
                 stream: false,
@@ -372,13 +385,24 @@ async function generateFilename(imageUrl) {
             console.error('Error text:', errorText);
             
             let errorMessage;
-            if (response.status === 404) {
-                errorMessage = 'LLaVa model not found. Please run: ollama pull llava:latest';
-            } else if (response.status === 500) {
-                errorMessage = `Ollama server error: ${errorText}. Please check if Ollama is running correctly.`;
-            } else if (response.status === 403) {
-                errorMessage = 'Access forbidden. Please check Ollama permissions and CORS settings.';
-            } else {
+            try {
+                const errorData = JSON.parse(errorText);
+                if (response.status === 404) {
+                    errorMessage = 'LLaVa model not found. Please run: ollama pull llava';
+                } else if (response.status === 500) {
+                    if (errorData.error?.includes('unable to make llava embedding from image')) {
+                        errorMessage = 'Failed to process image. Please ensure the image is valid and try again.';
+                    } else if (errorData.error?.includes('failed to create new sequence')) {
+                        errorMessage = 'LLaVa model not loaded properly. Please run: ollama pull llava';
+                    } else {
+                        errorMessage = `Ollama server error: ${errorData.error}. Please check if Ollama is running correctly.`;
+                    }
+                } else if (response.status === 403) {
+                    errorMessage = 'Access forbidden. Please check Ollama permissions and CORS settings.';
+                } else {
+                    errorMessage = `Failed to generate filename (Status ${response.status}): ${errorData.error || 'Unknown error'}`;
+                }
+            } catch (parseError) {
                 errorMessage = `Failed to generate filename (Status ${response.status}): ${errorText || 'Unknown error'}`;
             }
             throw new Error(errorMessage);
@@ -392,7 +416,7 @@ async function generateFilename(imageUrl) {
         return sanitizeFilename(data.response);
     } catch (error) {
         console.error('Detailed error:', error);
-        throw new Error('Failed to connect to Ollama: ' + error.message);
+        throw error; // Preserve the original error message
     }
 }
 
@@ -438,7 +462,7 @@ async function checkOllamaStatus() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: 'llava:latest',
+                model: 'llava',
                 prompt: 'test',
                 stream: false
             })
@@ -461,7 +485,7 @@ async function checkOllamaStatus() {
             if (modelCheck.status === 404) {
                 return {
                     status: 'error',
-                    message: 'LLaVa model not found. Please run: ollama pull llava:latest',
+                    message: 'LLaVa model not found. Please run: ollama pull llava',
                     checks
                 };
             }
