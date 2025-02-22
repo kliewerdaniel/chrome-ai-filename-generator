@@ -1,0 +1,50 @@
+/* popup/popup.css */
+.status-panel {
+    background-color: #f5f5f5;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+}
+
+.status-item {
+    display: flex;
+    justify-content: space-between;
+    margin: 10px 0;
+}
+
+.status {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.status.running {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+}
+
+.status.stopped {
+    background-color: #ffebee;
+    color: #c62828;
+}
+
+.button {
+    width: 100%;
+    padding: 10px;
+    margin: 10px 0;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.button.start {
+    background-color: #4caf50;
+    color: white;
+}
+
+.button.stop {
+    background-color: #f44336;
+    color: white;
+}

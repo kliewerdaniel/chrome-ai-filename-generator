@@ -1,0 +1,50 @@
+{
+    "name": "AI Filename Generator",
+    "version": "1.0",
+    "description": "Automatically generates descriptive filenames for downloaded images using AI.",
+    "manifest_version": 3,
+    "permissions": [
+        "contextMenus",
+        "downloads",
+        "storage",
+        "notifications",
+        "tabs",
+        "declarativeNetRequestWithHostAccess",
+        "activeTab"
+    ],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:11434/ http://localhost:11435/ https://* http://* data:;"
+    },
+    "background": {
+        "service_worker": "service-worker.js",
+        "type": "module"
+    },
+    "host_permissions": [
+        "http://localhost:11434/*",
+        "http://localhost:11435/*",
+        "<all_urls>"
+    ],
+    "declarative_net_request": {
+        "rule_resources": [{
+            "id": "ruleset_1",
+            "enabled": true,
+            "path": "rules.json"
+        }]
+    },
+    "action": {
+      "default_popup": "popup/popup.html",
+      "default_icon": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+      }
+    },
+    "web_accessible_resources": [{
+      "resources": ["proxy-manager.js"],
+      "matches": ["<all_urls>"]
+    }],
+    "content_scripts": [{
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }]
+}

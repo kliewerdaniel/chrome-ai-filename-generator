@@ -1,0 +1,2548 @@
+--- /Users/danielkliewer/chrome-ai-filename-generator/proxy-manager.js ---
+// proxy-manager.js
+class ProxyManager {
+    constructor() {
+        this.isRunning = false;
+        this.proxyUrl = 'http://localhost:11435';
+        this.ollamaUrl = 'http://localhost:11434';
+    }
+
+    async startProxy() {
+        if (!this.isRunning) {
+            try {
+                // First check if proxy server is running
+                const proxyCheck = await fetch(`${this.proxyUrl}/api/version`).catch(() => null);
+                if (!proxyCheck) {
+                    throw new Error('Proxy server not running. Please start it with: cd api && node cors-proxy.js');
+                }
+
+                // Then check if Ollama is accessible directly
+                const ollamaCheck = await fetch(`${this.ollamaUrl}/api/version`).catch(() => null);
+                if (!ollamaCheck) {
+                    throw new Error('Cannot connect to Ollama. Please ensure it is running.');
+                }
+
+                this.isRunning = true;
+                console.log('Connected to Ollama');
+            } catch (error) {
+                console.error('Failed to connect:', error);
+                throw error;
+            }
+        }
+    }
+
+    async stopProxy() {
+        if (this.isRunning) {
+            this.isRunning = false;
+            console.log('Proxy stopped');
+        }
+    }
+
+    isProxyRunning() {
+        return this.isRunning;
+    }
+
+    async proxyFetch(url, options = {}) {
+        if (!this.isRunning) {
+            await this.startProxy().catch(() => {});
+        }
+
+        try {
+            // Parse and reconstruct the URL
+            const urlObj = new URL(url);
+            const path = urlObj.pathname;
+            const proxyUrl = new URL(path, this.proxyUrl).toString();
+            
+            console.log('Making request to proxy:', proxyUrl);
+            
+            const enhancedOptions = {
+                ...options,
+                headers: {
+                    ...options.headers,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                mode: 'cors',
+                credentials: 'omit'
+            };
+
+            const response = await fetch(proxyUrl, enhancedOptions);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Proxy response error:', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    body: errorText
+                });
+                throw new Error(`HTTP error! status: ${response.status}, message: ${errorText || response.statusText}`);
+            }
+            
+            return response;
+        } catch (error) {
+            console.error('Proxy fetch error:', {
+                url: url,
+                error: error.message,
+                stack: error.stack
+            });
+
+            this.isRunning = false;
+            throw new Error('Lost connection to proxy server. Please ensure both proxy and Ollama are running.');
+        }
+    }
+}
+
+export const proxyManager = new ProxyManager();
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/proxy-server.js ---
+// proxy-server.js
+export class ProxyServer {
+    constructor() {
+        this.server = null;
+    }
+
+    async start() {
+        // Create a local server
+        this.server = await chrome.system.network.createTCPServer({
+            address: '127.0.0.1',
+            port: 11435,
+            backlog: 5
+        });
+
+        // Handle incoming connections
+        this.server.onAccept.addListener(async (info) => {
+            const socket = info.clientSocket;
+            
+            // Read request
+            const data = await this.readSocket(socket);
+            const request = this.parseRequest(data);
+
+            // Forward to Ollama
+            const response = await fetch('http://localhost:11434' + request.path, {
+                method: request.method,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: request.body
+            });
+
+            // Send response with CORS headers
+            const responseBody = await response.text();
+            const corsHeaders = {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Content-Type': 'application/json'
+            };
+
+            const responseText = [
+                'HTTP/1.1 ' + response.status + ' ' + response.statusText,
+                ...Object.entries(corsHeaders).map(([k, v]) => `${k}: ${v}`),
+                '',
+                responseBody
+            ].join('\r\n');
+
+            await this.writeSocket(socket, responseText);
+            socket.disconnect();
+        });
+
+        // Start listening
+        await this.server.listen();
+        console.log('Proxy server started on port 11435');
+    }
+
+    async stop() {
+        if (this.server) {
+            await this.server.disconnect();
+            this.server = null;
+            console.log('Proxy server stopped');
+        }
+    }
+
+    async readSocket(socket) {
+        return new Promise((resolve, reject) => {
+            let data = '';
+            socket.onData.addListener((info) => {
+                data += new TextDecoder().decode(info.data);
+                if (data.includes('\r\n\r\n')) {
+                    resolve(data);
+                }
+            });
+            socket.onError.addListener(reject);
+        });
+    }
+
+    async writeSocket(socket, data) {
+        return new Promise((resolve, reject) => {
+            socket.write(new TextEncoder().encode(data), resolve);
+            socket.onError.addListener(reject);
+        });
+    }
+
+    parseRequest(data) {
+        const [headers, body] = data.split('\r\n\r\n');
+        const [firstLine, ...headerLines] = headers.split('\r\n');
+        const [method, path] = firstLine.split(' ');
+        return { method, path, body };
+    }
+}
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/.DS_Store ---
+--- /Users/danielkliewer/chrome-ai-filename-generator/.DS_Store (ERROR: 'utf-8' codec can't decode byte 0xff in position 1066: invalid start byte) ---
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/combined_output.txt ---
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/INSTALL.md ---
+# Installation Instructions
+
+## 1. Install Prerequisites
+
+1. Install Node.js if not already installed
+2. Install Ollama from [ollama.ai](https://ollama.ai)
+3. Install the LLaVa model:
+   ```bash
+   ollama pull llava
+   ```
+
+## 2. Start Required Services
+
+1. Start the Ollama server:
+   ```bash
+   ollama serve
+   ```
+
+2. Start the CORS proxy server:
+   ```bash
+   cd api
+   npm install  # Only needed first time
+   node proxy.js
+   ```
+
+## 3. Install Extension
+
+1. Open Chrome and go to `chrome://extensions/`
+2. Enable "Developer mode" in the top right
+3. Click "Load unpacked" and select the extension directory
+4. The extension should connect to Ollama automatically
+
+## 4. Use the Extension
+
+1. Right-click on any image
+2. Select "Save with AI-generated filename" or "Generate filename (with preview)"
+3. The image will be saved with an AI-generated filename
+
+## Troubleshooting
+
+1. Ensure Ollama is running:
+   ```bash
+   # Check Ollama status
+   ollama list
+   
+   # If not running, start it
+   ollama serve
+   ```
+
+2. Check Chrome's extension error console (chrome://extensions)
+
+3. Common issues:
+   - "Cannot connect to Ollama": Make sure both Ollama and the proxy server are running
+   - "LLaVa model not found": Run `ollama pull llava`
+   - "Failed to fetch image": Check if the image URL is accessible
+   - "CORS error": Ensure the proxy server is running on port 11435
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/README.md ---
+# AI Filename Generator Chrome Extension
+
+A Chrome extension that uses AI (LLaVa) to generate descriptive filenames for images when downloading them. The extension analyzes image content and suggests meaningful filenames based on what it sees.
+
+## Features
+
+- **Right-Click Menu Integration**
+  - Quick save with AI-generated filename
+  - Option to preview and customize filename before saving
+
+- **Smart Filename Generation**
+  - Analyzes image content using AI
+  - Creates concise yet descriptive filenames
+  - Supports customizable filename formats
+
+- **Local Processing with Ollama**
+  - Uses Ollama for local image analysis
+  - Fast and private - no data sent to external servers
+  - Requires Ollama with LLaVa model installed
+
+- **User-Friendly Interface**
+  - Image preview
+  - Filename customization
+  - Format templates
+  - Progress indicators
+  - Error handling
+
+## Installation
+
+1. Clone this repository or download the source code
+2. Open Chrome and navigate to `chrome://extensions/`
+3. Enable "Developer mode" in the top right
+4. Click "Load unpacked" and select the extension directory
+
+## Setup
+
+### Install and Configure Ollama
+
+1. Install [Ollama](https://ollama.ai/) for your operating system
+2. Pull the LLaVa model:
+   ```bash
+   ollama pull llava
+   ```
+3. Start Ollama:
+   - On macOS/Linux: Ollama runs automatically after installation
+   - On Windows: Start Ollama from the Start Menu or run `ollama serve` in a terminal
+4. Verify Ollama is running by opening `http://localhost:11434` in your browser
+
+## Usage
+
+### Quick Save
+1. Right-click on any image
+2. Select "Save with AI-generated filename"
+3. The image will be saved automatically with an AI-generated filename
+
+### Preview & Customize
+1. Right-click on any image
+2. Select "Generate filename (with preview)"
+3. Click the extension icon in the toolbar
+4. Preview the suggested filename
+5. Edit if desired
+6. Click "Save Download"
+
+### Customize Settings
+1. Click the extension icon
+2. Access the Settings panel
+3. Configure:
+   - Filename format template
+   - Preview preferences
+4. Check Ollama status
+
+## Filename Format Templates
+
+Use these placeholders in your format:
+- `{object}` - Main subject (required)
+- `{location}` - Location context
+- `{date}` - Current date
+
+Example: `{object}-{location}-{date}.jpg`
+
+## Permissions
+
+The extension requires these permissions:
+- `contextMenus`: For right-click menu integration
+- `downloads`: To save images
+- `storage`: To store settings
+- `notifications`: For status updates
+- `<all_urls>`: To access image URLs for processing
+
+## Error Handling
+
+The extension includes robust error handling for:
+- Network issues
+- API failures
+- Timeout conditions
+- Invalid responses
+- Missing dependencies
+
+## Development
+
+### Project Structure
+```
+chrome-ai-filename-generator/
+├── manifest.json          # Extension configuration
+├── background.js         # Background script for context menu
+├── content.js           # Content script (if needed)
+├── popup/              # Extension popup UI
+│   ├── popup.html
+│   ├── popup.js
+│   ├── popup.css
+├── api/               # API integration
+│   ├── analyze.js
+│   ├── llava_integration.js
+├── icons/           # Extension icons
+└── README.md
+```
+
+### Building
+
+No build step required. The extension uses native ES modules.
+
+### Testing
+
+1. Make changes to the code
+2. Reload the extension in `chrome://extensions/`
+3. Test the changes
+
+## Troubleshooting
+
+### Common Issues
+
+1. "Cannot connect to Ollama"
+   - Ensure Ollama is running
+   - Try visiting `http://localhost:11434` in your browser
+   - Restart Ollama if needed
+
+2. "LLaVa model not found"
+   - Run `ollama pull llava` to install the model
+   - Check installed models with `ollama list`
+
+3. "Failed to generate filename"
+   - Check if Ollama is running
+   - Verify the image URL is accessible
+   - Try reloading the extension
+
+4. Extension not working
+   - Reload the extension in chrome://extensions
+   - Restart Chrome
+   - Ensure Ollama is running
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+## License
+
+MIT License - feel free to use and modify as needed.
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/combine_files.py ---
+import os
+
+def combine_files_in_directory(output_file="combined_output.txt", ignore_dirs=None):
+    """
+    Combines all files in the current directory (recursively) into a single output file.
+    The file names are recorded before their contents.
+    Directories in `ignore_dirs` will be skipped.
+    """
+    if ignore_dirs is None:
+        ignore_dirs = ["venv", "node_modules"]  # Default to ignoring 'venv'
+
+    with open(output_file, "w", encoding="utf-8") as outfile:
+        for root, dirs, files in os.walk(os.getcwd()):
+            # Modify the dirs list in-place to skip ignored directories
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+            
+            for file in files:
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as infile:
+                        # Write the file name and a separator
+                        outfile.write(f"--- {file_path} ---\n")
+                        # Write the file content
+                        outfile.write(infile.read())
+                        outfile.write("\n\n")
+                except Exception as e:
+                    # Log an error if a file couldn't be read
+                    outfile.write(f"--- {file_path} (ERROR: {e}) ---\n\n")
+
+if __name__ == "__main__":
+    combine_files_in_directory()
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/rules.json ---
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        {
+          "header": "access-control-allow-origin",
+          "operation": "set",
+          "value": "*"
+        },
+        {
+          "header": "access-control-allow-methods",
+          "operation": "set",
+          "value": "GET, POST, OPTIONS"
+        },
+        {
+          "header": "access-control-allow-headers",
+          "operation": "set",
+          "value": "*"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "http://localhost:11434/*",
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  }
+]
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/manifest.json ---
+{
+    "name": "AI Filename Generator",
+    "version": "1.0",
+    "description": "Automatically generates descriptive filenames for downloaded images using AI.",
+    "manifest_version": 3,
+    "permissions": [
+        "contextMenus",
+        "downloads",
+        "storage",
+        "notifications",
+        "tabs",
+        "declarativeNetRequestWithHostAccess",
+        "activeTab"
+    ],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:11434/ http://localhost:11435/ https://* http://* data:;"
+    },
+    "background": {
+        "service_worker": "service-worker.js",
+        "type": "module"
+    },
+    "host_permissions": [
+        "http://localhost:11434/*",
+        "http://localhost:11435/*",
+        "<all_urls>"
+    ],
+    "declarative_net_request": {
+        "rule_resources": [{
+            "id": "ruleset_1",
+            "enabled": true,
+            "path": "rules.json"
+        }]
+    },
+    "action": {
+      "default_popup": "popup/popup.html",
+      "default_icon": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+      }
+    },
+    "web_accessible_resources": [{
+      "resources": ["proxy-manager.js"],
+      "matches": ["<all_urls>"]
+    }],
+    "content_scripts": [{
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }]
+}
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/service-worker.js ---
+// service-worker.js
+import { proxyManager } from './proxy-manager.js';
+
+const OLLAMA_ENDPOINT = "http://localhost:11435/api/generate";
+
+// Create context menu items
+function createContextMenus() {
+    // Remove existing items
+    chrome.contextMenus.removeAll();
+
+    // Create new items
+    const menuItems = [
+        {
+            id: "aiSaveImage",
+            title: "Save with AI-generated filename",
+            contexts: ["image"]
+        },
+        {
+            id: "aiSaveImagePreview",
+            title: "Generate filename (with preview)",
+            contexts: ["image"]
+        }
+    ];
+
+    menuItems.forEach(item => {
+        try {
+            chrome.contextMenus.create(item);
+        } catch (error) {
+            console.error(`Failed to create menu item ${item.id}:`, error);
+        }
+    });
+}
+
+// Initialize extension
+async function initialize() {
+    try {
+        // Try to start proxy
+        await proxyManager.startProxy();
+    } catch (error) {
+        console.error('Failed to initialize proxy:', error);
+        showNotification('Proxy Error', error.message);
+    }
+}
+
+// Create menus and initialize on install
+chrome.runtime.onInstalled.addListener(async () => {
+    createContextMenus();
+    await initialize();
+});
+
+// Re-initialize when service worker starts
+initialize().catch(error => {
+    console.error('Failed to initialize service worker:', error);
+});
+
+// Handle context menu clicks
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    try {
+        if (info.menuItemId === "aiSaveImage") {
+            // Direct save without preview
+            const filename = await generateFilename(info.srcUrl);
+            await downloadImage(info.srcUrl, filename);
+        } else if (info.menuItemId === "aiSaveImagePreview") {
+            // Save URL for popup preview
+            chrome.storage.local.set({ imageUrl: info.srcUrl }, () => {
+                showNotification('AI Filename Generator', 'Click the extension icon to preview and customize the filename.');
+            });
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification('Error', error.message || 'Failed to process image');
+    }
+});
+
+// Handle messages from popup
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    console.log('Received message:', request.action);
+    
+    if (request.action === 'analyzeImage') {
+        generateFilename(request.imageUrl)
+            .then(filename => sendResponse({ filename }))
+            .catch(error => sendResponse({ error: error.message }));
+        return true;
+    } else if (request.action === 'checkOllama') {
+        checkOllamaStatus()
+            .then(status => sendResponse(status))
+            .catch(error => sendResponse({ error: error.message }));
+        return true;
+    } else if (request.action === 'startProxy') {
+        proxyManager.startProxy()
+            .then(() => {
+                console.log('Proxy started successfully');
+                sendResponse({ success: true });
+            })
+            .catch(error => {
+                console.error('Error starting proxy:', error);
+                sendResponse({ error: error.message });
+            });
+        return true;
+    } else if (request.action === 'stopProxy') {
+        proxyManager.stopProxy()
+            .then(() => {
+                console.log('Proxy stopped successfully');
+                sendResponse({ success: true });
+            })
+            .catch(error => {
+                console.error('Error stopping proxy:', error);
+                sendResponse({ error: error.message });
+            });
+        return true;
+    } else if (request.action === 'getProxyStatus') {
+        const status = proxyManager.isProxyRunning();
+        console.log('Current proxy status:', status);
+        sendResponse({ isRunning: status });
+        return true;
+    }
+});
+
+// Enable declarativeNetRequest rules
+chrome.declarativeNetRequest.updateEnabledRulesets({
+    enableRulesetIds: ["ruleset_1"]
+});
+
+// Generate filename using Ollama
+async function generateFilename(imageUrl) {
+    try {
+        // Get base64 image data
+        let imageData;
+        try {
+            imageData = await fetchImageAsBase64(imageUrl);
+        } catch (error) {
+            throw new Error(`Failed to fetch image: ${error.message}. Please make sure the image URL is accessible.`);
+        }
+
+        // Prepare prompt
+        const prompt = `Analyze this image and generate a descriptive filename that captures the main subject and context. 
+        Requirements:
+        1. Be specific but concise (3-5 words max)
+        2. Include main subject and any relevant context (location, action, color)
+        3. Use underscores between words
+        4. No file extension
+        5. Only lowercase letters, numbers, and underscores
+        
+        Examples:
+        - red_rose_garden
+        - mountain_sunset_colorado
+        - black_cat_sleeping
+        - vintage_car_show
+        
+        Generate filename:`;
+
+        // Send to Ollama with improved error handling
+        const requestOptions = {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'llava:latest',
+                prompt: prompt,
+                images: [imageData],
+                stream: false,
+                options: {
+                    temperature: 0.7,
+                    top_p: 0.9
+                }
+            })
+        };
+
+        const response = await (proxyManager.isProxyRunning()
+            ? proxyManager.proxyFetch(OLLAMA_ENDPOINT, requestOptions)
+            : fetch(OLLAMA_ENDPOINT, requestOptions));
+
+        if (!response.ok) {
+            // Enhanced error logging
+            console.error('Ollama response:', response);
+            console.error('Response headers:', response.headers);
+            const errorText = await response.text();
+            console.error('Error text:', errorText);
+            
+            let errorMessage;
+            if (response.status === 404) {
+                errorMessage = 'LLaVa model not found. Please run: ollama pull llava:latest';
+            } else if (response.status === 500) {
+                errorMessage = `Ollama server error: ${errorText}. Please check if Ollama is running correctly.`;
+            } else if (response.status === 403) {
+                errorMessage = 'Access forbidden. Please check Ollama permissions and CORS settings.';
+            } else {
+                errorMessage = `Failed to generate filename (Status ${response.status}): ${errorText || 'Unknown error'}`;
+            }
+            throw new Error(errorMessage);
+        }
+
+        const data = await response.json();
+        if (!data.response) {
+            throw new Error('Invalid response from Ollama');
+        }
+
+        return sanitizeFilename(data.response);
+    } catch (error) {
+        console.error('Detailed error:', error);
+        throw new Error('Failed to connect to Ollama: ' + error.message);
+    }
+}
+
+// Check Ollama status with improved error handling
+async function checkOllamaStatus() {
+    try {
+        // Check if Ollama is running
+        const healthCheck = await (proxyManager.isProxyRunning()
+            ? proxyManager.proxyFetch('http://localhost:11434/api/version')
+            : fetch('http://localhost:11434/api/version'));
+        
+        if (!healthCheck.ok) {
+            return { 
+                status: 'error', 
+                message: 'Cannot connect to Ollama. Please ensure it is running.' 
+            };
+        }
+
+        // Check if LLaVa model is available
+        const modelCheckOptions = {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'llava:latest',
+                prompt: 'test',
+                stream: false
+            })
+        };
+
+        const modelCheck = await (proxyManager.isProxyRunning()
+            ? proxyManager.proxyFetch(OLLAMA_ENDPOINT, modelCheckOptions)
+            : fetch(OLLAMA_ENDPOINT, modelCheckOptions));
+
+        if (modelCheck.ok) {
+            return { status: 'ok', message: 'Ollama is running and LLaVa model is available' };
+        }
+
+        if (modelCheck.status === 404) {
+            return { status: 'error', message: 'LLaVa model not found. Please run: ollama pull llava:latest' };
+        }
+        
+        const errorData = await modelCheck.text();
+        return { 
+            status: 'error', 
+            message: `Ollama error: ${errorData || modelCheck.statusText}. Please ensure the llava model is installed.` 
+        };
+    } catch (error) {
+        return { 
+            status: 'error', 
+            message: 'Cannot connect to Ollama. Please ensure it is running and accessible.' 
+        };
+    }
+}
+
+// Helper function to fetch image and convert to base64
+async function fetchImageAsBase64(imageUrl) {
+    try {
+        // First try direct fetch
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const blob = await response.blob();
+        const base64Data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = () => reject(new Error('Failed to convert image to base64'));
+            reader.readAsDataURL(blob);
+        });
+        
+        return base64Data;
+    } catch (directFetchError) {
+        console.log('Direct fetch failed, trying content script method...');
+        
+        try {
+            // Create a tab to fetch the image
+            const tab = await chrome.tabs.create({ 
+                url: imageUrl, 
+                active: false
+            });
+
+            // Wait for tab to fully load
+            await new Promise((resolve) => {
+                chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+                    if (tabId === tab.id && info.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        resolve();
+                    }
+                });
+            });
+
+            // Send message to content script
+            const response = await chrome.tabs.sendMessage(tab.id, {
+                action: 'fetchImage',
+                url: imageUrl
+            });
+
+            // Close the tab
+            await chrome.tabs.remove(tab.id);
+
+            if (!response || !response.success) {
+                throw new Error(response?.error || 'Failed to fetch image');
+            }
+
+            return response.data;
+        } catch (error) {
+            throw new Error(`Failed to fetch image: ${error.message}`);
+        }
+    }
+}
+
+// Helper function to sanitize filename
+function sanitizeFilename(response) {
+    const filename = response
+        .trim()
+        .toLowerCase()
+        .replace(/["']/g, '')
+        .replace(/\.[^/.]+$/, '')
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
+
+    return filename || "descriptive_image";
+}
+
+// Helper function to download image
+async function downloadImage(url, filename) {
+    try {
+        await chrome.downloads.download({
+            url: url,
+            filename: filename + '.jpg',
+            conflictAction: 'uniquify'
+        });
+    } catch (error) {
+        throw new Error('Failed to download image: ' + error.message);
+    }
+}
+
+// Helper function to show notification
+function showNotification(title, message) {
+    chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icons/icon48.png',
+        title: title,
+        message: message
+    });
+}
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/content.js ---
+// content.js
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'fetchImage') {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        
+        // Create a promise to handle image loading
+        const imageLoadPromise = new Promise((resolve, reject) => {
+            img.onload = () => {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    
+                    const base64Data = canvas.toDataURL('image/jpeg').split(',')[1];
+                    resolve(base64Data);
+                } catch (error) {
+                    reject(new Error('Failed to convert image to base64: ' + error.message));
+                } finally {
+                    canvas.remove();
+                }
+            };
+            
+            img.onerror = () => {
+                reject(new Error('Failed to load image: ' + request.url));
+            };
+        });
+
+        // Set image source after setting up handlers
+        img.src = request.url;
+
+        // Handle the promise
+        imageLoadPromise
+            .then(base64Data => {
+                sendResponse({ success: true, data: base64Data });
+            })
+            .catch(error => {
+                sendResponse({ success: false, error: error.message });
+            })
+            .finally(() => {
+                img.remove();
+            });
+
+        return true; // Keep message channel open for async response
+    }
+});
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/popup/popup.js ---
+// popup/popup.js
+let proxyRunning = false;
+
+function showError(message) {
+    const errorDiv = document.getElementById('errorMessage');
+    errorDiv.textContent = message;
+    errorDiv.style.display = 'block';
+    setTimeout(() => {
+        errorDiv.style.display = 'none';
+    }, 5000);
+}
+
+async function checkServices() {
+    console.log('Checking services...');
+    try {
+        // Check Ollama
+        const ollamaStatus = document.getElementById('ollamaStatus');
+        try {
+            const response = await fetch('http://localhost:11434/api/version');
+            if (response.ok) {
+                ollamaStatus.textContent = 'Running';
+                ollamaStatus.className = 'status running';
+            } else {
+                throw new Error('Not running');
+            }
+        } catch {
+            ollamaStatus.textContent = 'Not Running';
+            ollamaStatus.className = 'status stopped';
+        }
+
+        // Check Proxy status from background script
+        const proxyStatus = document.getElementById('proxyStatus');
+        const response = await chrome.runtime.sendMessage({ action: 'getProxyStatus' });
+        proxyRunning = response.isRunning;
+        proxyStatus.textContent = proxyRunning ? 'Running' : 'Not Running';
+        proxyStatus.className = proxyRunning ? 'status running' : 'status stopped';
+        updateProxyButton();
+    } catch (error) {
+        console.error('Error checking services:', error);
+    }
+}
+
+function updateProxyButton() {
+    const button = document.getElementById('toggleProxy');
+    if (proxyRunning) {
+        button.textContent = 'Stop Proxy';
+        button.className = 'button stop';
+    } else {
+        button.textContent = 'Start Proxy';
+        button.className = 'button start';
+    }
+}
+
+document.getElementById('toggleProxy').addEventListener('click', async () => {
+    const button = document.getElementById('toggleProxy');
+    button.disabled = true;
+    
+    try {
+        console.log('Toggle proxy button clicked, current state:', proxyRunning);
+        const action = proxyRunning ? 'stopProxy' : 'startProxy';
+        
+        console.log('Sending message to background script:', action);
+        const response = await chrome.runtime.sendMessage({ action });
+        console.log('Received response:', response);
+        
+        if (response.error) {
+            throw new Error(response.error);
+        }
+        
+        await checkServices();
+    } catch (error) {
+        console.error('Error toggling proxy:', error);
+        showError(error.message || 'Failed to toggle proxy server');
+    } finally {
+        button.disabled = false;
+    }
+});
+
+// Check services status every 5 seconds
+setInterval(checkServices, 5000);
+
+// Initial check
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('Popup loaded, performing initial service check');
+    checkServices();
+});
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/popup/popup.html ---
+<!-- popup/popup.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="status-panel">
+        <h3>Service Status</h3>
+        <div class="status-item">
+            <span>Ollama:</span>
+            <span id="ollamaStatus" class="status">Checking...</span>
+        </div>
+        <div class="status-item">
+            <span>Proxy Server:</span>
+            <span id="proxyStatus" class="status">Checking...</span>
+        </div>
+        <button id="toggleProxy" class="button">Start Proxy</button>
+    </div>
+
+    <div id="imagePreviewContainer" style="display: none;">
+        <img id="imagePreview" alt="Selected image">
+    </div>
+
+    <div id="filenamePreview">
+        <h3>Filename Preview</h3>
+        <input type="text" id="previewFilename" readonly>
+    </div>
+
+    <div class="button-container">
+        <button id="generateButton">Generate Filename</button>
+        <button id="saveButton">Save Download</button>
+    </div>
+
+    <div id="errorMessage" class="error-message" style="display: none;"></div>
+    <script src="popup.js" type="module"></script>
+</body>
+</html>
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/popup/popup.css ---
+/* popup/popup.css */
+.status-panel {
+    background-color: #f5f5f5;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+}
+
+.status-item {
+    display: flex;
+    justify-content: space-between;
+    margin: 10px 0;
+}
+
+.status {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.status.running {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+}
+
+.status.stopped {
+    background-color: #ffebee;
+    color: #c62828;
+}
+
+.button {
+    width: 100%;
+    padding: 10px;
+    margin: 10px 0;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.button.start {
+    background-color: #4caf50;
+    color: white;
+}
+
+.button.stop {
+    background-color: #f44336;
+    color: white;
+}
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/_metadata/generated_indexed_rulesets/_ruleset1 ---
+--- /Users/danielkliewer/chrome-ai-filename-generator/_metadata/generated_indexed_rulesets/_ruleset1 (ERROR: 'utf-8' codec can't decode byte 0xf4 in position 51: invalid continuation byte) ---
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/icons/icon16.png ---
+--- /Users/danielkliewer/chrome-ai-filename-generator/icons/icon16.png (ERROR: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte) ---
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/icons/.DS_Store ---
+--- /Users/danielkliewer/chrome-ai-filename-generator/icons/.DS_Store (ERROR: 'utf-8' codec can't decode byte 0xff in position 314: invalid start byte) ---
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/icons/icon48.png ---
+--- /Users/danielkliewer/chrome-ai-filename-generator/icons/icon48.png (ERROR: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte) ---
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/icons/icon128.png ---
+--- /Users/danielkliewer/chrome-ai-filename-generator/icons/icon128.png (ERROR: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte) ---
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/proxy.js ---
+#!/usr/bin/env node
+
+import express from 'express';
+import cors from 'cors';
+import fetch from 'node-fetch';
+
+const app = express();
+const port = 11435;
+
+// Enable CORS for all routes
+app.use(cors());
+
+// Parse JSON bodies
+app.use(express.json());
+
+// Forward all requests to Ollama
+app.all('*', async (req, res) => {
+    try {
+        const ollamaUrl = 'http://localhost:11434' + req.path;
+        
+        // Forward the request to Ollama
+        const response = await fetch(ollamaUrl, {
+            method: req.method,
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: ['POST', 'PUT', 'PATCH'].includes(req.method) ? JSON.stringify(req.body) : undefined
+        });
+
+        // Get response data
+        const data = await response.text();
+
+        // Forward Ollama's response
+        res.status(response.status)
+           .set('Content-Type', 'application/json')
+           .send(data);
+    } catch (error) {
+        console.error('Proxy error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Start server
+app.listen(port, () => {
+    console.log(`CORS proxy server running on port ${port}`);
+});
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/install.sh ---
+#!/bin/bash
+
+# Get the absolute path of the script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Make scripts executable
+chmod +x "$SCRIPT_DIR/proxy-host.js"
+chmod +x "$SCRIPT_DIR/cors-proxy.js"
+
+# Create native messaging host manifest directory if it doesn't exist
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    MANIFEST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    # Linux
+    MANIFEST_DIR="$HOME/.config/google-chrome/NativeMessagingHosts"
+fi
+
+mkdir -p "$MANIFEST_DIR"
+
+# Update manifest path to point to the proxy host script
+MANIFEST_CONTENT=$(cat "$SCRIPT_DIR/com.ollama.proxy.json" | sed "s|\"path\": \"proxy-host.js\"|\"path\": \"$SCRIPT_DIR/proxy-host.js\"|")
+
+# Write updated manifest to the correct location
+echo "$MANIFEST_CONTENT" > "$MANIFEST_DIR/com.ollama.proxy.json"
+
+# Install Node.js dependencies
+cd "$SCRIPT_DIR"
+npm install express cors node-fetch @modelcontextprotocol/sdk
+
+echo "Native messaging host installed successfully!"
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/llava_integration.js ---
+// llava_integration.js
+
+/**
+ * Integrates with the LLaVa AI model via Ollama to generate descriptive filenames for images.
+ */
+
+/**
+ * Sends the image URL to the background script for processing with Ollama.
+ * @param {string} imageUrl - The URL of the image to analyze.
+ * @returns {Promise<string>} - A promise that resolves to the generated filename.
+ */
+export async function getFilenameFromImage(imageUrl) {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+            { action: 'analyzeImage', imageUrl: imageUrl },
+            response => {
+                if (response.error) {
+                    reject(new Error(response.error));
+                } else {
+                    resolve(response.filename);
+                }
+            }
+        );
+    });
+}
+
+/**
+ * Check Ollama status
+ * @returns {Promise<{status: string, message: string}>}
+ */
+export async function checkOllamaStatus() {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+            { action: 'checkOllama' },
+            response => {
+                if (response.error) {
+                    reject(new Error(response.error));
+                } else {
+                    resolve(response);
+                }
+            }
+        );
+    });
+}
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/proxy-host.js ---
+#!/usr/bin/env node
+
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+let proxyProcess = null;
+
+// Function to read messages from Chrome
+function readMessage() {
+    const header = Buffer.alloc(4);
+    return new Promise((resolve, reject) => {
+        process.stdin.read(4, (err, bytes) => {
+            if (err) {
+                reject(err);
+                return;
+            }
+            if (bytes === null) {
+                resolve(null);
+                return;
+            }
+            const size = bytes.readUInt32LE(0);
+            process.stdin.read(size, (err, data) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+                resolve(JSON.parse(data.toString()));
+            });
+        });
+    });
+}
+
+// Function to write messages to Chrome
+function sendMessage(message) {
+    const json = JSON.stringify(message);
+    const header = Buffer.alloc(4);
+    header.writeUInt32LE(json.length, 0);
+    process.stdout.write(header);
+    process.stdout.write(json);
+}
+
+// Handle messages from Chrome
+async function handleMessage(message) {
+    try {
+        if (message.command === 'start') {
+            if (proxyProcess) {
+                sendMessage({ error: 'Proxy server is already running' });
+                return;
+            }
+
+            const scriptPath = resolve(__dirname, message.script);
+            proxyProcess = spawn('node', [scriptPath], {
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
+
+            proxyProcess.stdout.on('data', (data) => {
+                console.log(`Proxy stdout: ${data}`);
+            });
+
+            proxyProcess.stderr.on('data', (data) => {
+                console.error(`Proxy stderr: ${data}`);
+            });
+
+            proxyProcess.on('close', (code) => {
+                console.log(`Proxy process exited with code ${code}`);
+                proxyProcess = null;
+            });
+
+            sendMessage({ success: true });
+        } else if (message.command === 'stop') {
+            if (proxyProcess) {
+                proxyProcess.kill();
+                proxyProcess = null;
+                sendMessage({ success: true });
+            } else {
+                sendMessage({ error: 'Proxy server is not running' });
+            }
+        }
+    } catch (error) {
+        sendMessage({ error: error.message });
+    }
+}
+
+// Main loop
+async function main() {
+    try {
+        process.stdin.on('readable', async () => {
+            const message = await readMessage();
+            if (message) {
+                await handleMessage(message);
+            }
+        });
+
+        process.stdin.on('end', () => {
+            if (proxyProcess) {
+                proxyProcess.kill();
+            }
+            process.exit(0);
+        });
+    } catch (error) {
+        console.error('Error:', error);
+        process.exit(1);
+    }
+}
+
+main();
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/com.ollama.proxy.json ---
+{
+  "name": "com.ollama.proxy",
+  "description": "Native messaging host for Ollama CORS proxy",
+  "path": "proxy-host.js",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://*"
+  ]
+}
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/package-lock.json ---
+{
+  "name": "ollama-proxy",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "ollama-proxy",
+      "version": "1.0.0",
+      "dependencies": {
+        "cors": "^2.8.5",
+        "express": "^4.18.2",
+        "node-fetch": "^3.3.2"
+      }
+    },
+    "node_modules/accepts": {
+      "version": "1.3.8",
+      "resolved": "https://registry.npmjs.org/accepts/-/accepts-1.3.8.tgz",
+      "integrity": "sha512-PYAthTa2m2VKxuvSD3DPC/Gy+U+sOA1LAuT8mkmRuvw+NACSaeXEQ+NHcVF7rONl6qcaxV3Uuemwawk+7+SJLw==",
+      "license": "MIT",
+      "dependencies": {
+        "mime-types": "~2.1.34",
+        "negotiator": "0.6.3"
+      },
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/array-flatten": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/array-flatten/-/array-flatten-1.1.1.tgz",
+      "integrity": "sha512-PCVAQswWemu6UdxsDFFX/+gVeYqKAod3D3UVm91jHwynguOwAvYPhx8nNlM++NqRcK6CxxpUafjmhIdKiHibqg==",
+      "license": "MIT"
+    },
+    "node_modules/body-parser": {
+      "version": "1.20.3",
+      "resolved": "https://registry.npmjs.org/body-parser/-/body-parser-1.20.3.tgz",
+      "integrity": "sha512-7rAxByjUMqQ3/bHJy7D6OGXvx/MMc4IqBn/X0fcM1QUcAItpZrBEYhWGem+tzXH90c+G01ypMcYJBO9Y30203g==",
+      "license": "MIT",
+      "dependencies": {
+        "bytes": "3.1.2",
+        "content-type": "~1.0.5",
+        "debug": "2.6.9",
+        "depd": "2.0.0",
+        "destroy": "1.2.0",
+        "http-errors": "2.0.0",
+        "iconv-lite": "0.4.24",
+        "on-finished": "2.4.1",
+        "qs": "6.13.0",
+        "raw-body": "2.5.2",
+        "type-is": "~1.6.18",
+        "unpipe": "1.0.0"
+      },
+      "engines": {
+        "node": ">= 0.8",
+        "npm": "1.2.8000 || >= 1.4.16"
+      }
+    },
+    "node_modules/bytes": {
+      "version": "3.1.2",
+      "resolved": "https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz",
+      "integrity": "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/call-bind-apply-helpers": {
+      "version": "1.0.2",
+      "resolved": "https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz",
+      "integrity": "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==",
+      "license": "MIT",
+      "dependencies": {
+        "es-errors": "^1.3.0",
+        "function-bind": "^1.1.2"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/call-bound": {
+      "version": "1.0.3",
+      "resolved": "https://registry.npmjs.org/call-bound/-/call-bound-1.0.3.tgz",
+      "integrity": "sha512-YTd+6wGlNlPxSuri7Y6X8tY2dmm12UMH66RpKMhiX6rsk5wXXnYgbUcOt8kiS31/AjfoTOvCsE+w8nZQLQnzHA==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bind-apply-helpers": "^1.0.1",
+        "get-intrinsic": "^1.2.6"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/content-disposition": {
+      "version": "0.5.4",
+      "resolved": "https://registry.npmjs.org/content-disposition/-/content-disposition-0.5.4.tgz",
+      "integrity": "sha512-FveZTNuGw04cxlAiWbzi6zTAL/lhehaWbTtgluJh4/E95DqMwTmha3KZN1aAWA8cFIhHzMZUvLevkw5Rqk+tSQ==",
+      "license": "MIT",
+      "dependencies": {
+        "safe-buffer": "5.2.1"
+      },
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/content-type": {
+      "version": "1.0.5",
+      "resolved": "https://registry.npmjs.org/content-type/-/content-type-1.0.5.tgz",
+      "integrity": "sha512-nTjqfcBFEipKdXCv4YDQWCfmcLZKm81ldF0pAopTvyrFGVbcR6P/VAAd5G7N+0tTr8QqiU0tFadD6FK4NtJwOA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/cookie": {
+      "version": "0.7.1",
+      "resolved": "https://registry.npmjs.org/cookie/-/cookie-0.7.1.tgz",
+      "integrity": "sha512-6DnInpx7SJ2AK3+CTUE/ZM0vWTUboZCegxhC2xiIydHR9jNuTAASBrfEpHhiGOZw/nX51bHt6YQl8jsGo4y/0w==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/cookie-signature": {
+      "version": "1.0.6",
+      "resolved": "https://registry.npmjs.org/cookie-signature/-/cookie-signature-1.0.6.tgz",
+      "integrity": "sha512-QADzlaHc8icV8I7vbaJXJwod9HWYp8uCqf1xa4OfNu1T7JVxQIrUgOWtHdNDtPiywmFbiS12VjotIXLrKM3orQ==",
+      "license": "MIT"
+    },
+    "node_modules/cors": {
+      "version": "2.8.5",
+      "resolved": "https://registry.npmjs.org/cors/-/cors-2.8.5.tgz",
+      "integrity": "sha512-KIHbLJqu73RGr/hnbrO9uBeixNGuvSQjul/jdFvS/KFSIH1hWVd1ng7zOHx+YrEfInLG7q4n6GHQ9cDtxv/P6g==",
+      "license": "MIT",
+      "dependencies": {
+        "object-assign": "^4",
+        "vary": "^1"
+      },
+      "engines": {
+        "node": ">= 0.10"
+      }
+    },
+    "node_modules/data-uri-to-buffer": {
+      "version": "4.0.1",
+      "resolved": "https://registry.npmjs.org/data-uri-to-buffer/-/data-uri-to-buffer-4.0.1.tgz",
+      "integrity": "sha512-0R9ikRb668HB7QDxT1vkpuUBtqc53YyAwMwGeUFKRojY/NWKvdZ+9UYtRfGmhqNbRkTSVpMbmyhXipFFv2cb/A==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 12"
+      }
+    },
+    "node_modules/debug": {
+      "version": "2.6.9",
+      "resolved": "https://registry.npmjs.org/debug/-/debug-2.6.9.tgz",
+      "integrity": "sha512-bC7ElrdJaJnPbAP+1EotYvqZsb3ecl5wi6Bfi6BJTUcNowp6cvspg0jXznRTKDjm/E7AdgFBVeAPVMNcKGsHMA==",
+      "license": "MIT",
+      "dependencies": {
+        "ms": "2.0.0"
+      }
+    },
+    "node_modules/depd": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/depd/-/depd-2.0.0.tgz",
+      "integrity": "sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/destroy": {
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/destroy/-/destroy-1.2.0.tgz",
+      "integrity": "sha512-2sJGJTaXIIaR1w4iJSNoN0hnMY7Gpc/n8D4qSCJw8QqFWXf7cuAgnEHxBpweaVcPevC2l3KpjYCx3NypQQgaJg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8",
+        "npm": "1.2.8000 || >= 1.4.16"
+      }
+    },
+    "node_modules/dunder-proto": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/dunder-proto/-/dunder-proto-1.0.1.tgz",
+      "integrity": "sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bind-apply-helpers": "^1.0.1",
+        "es-errors": "^1.3.0",
+        "gopd": "^1.2.0"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/ee-first": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/ee-first/-/ee-first-1.1.1.tgz",
+      "integrity": "sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==",
+      "license": "MIT"
+    },
+    "node_modules/encodeurl": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.0.tgz",
+      "integrity": "sha512-Q0n9HRi4m6JuGIV1eFlmvJB7ZEVxu93IrMyiMsGC0lrMJMWzRgx6WGquyfQgZVb31vhGgXnfmPNNXmxnOkRBrg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/es-define-property": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz",
+      "integrity": "sha512-e3nRfgfUZ4rNGL232gUgX06QNyyez04KdjFrF+LTRoOXmrOgFKDg4BCdsjW8EnT69eqdYGmRpJwiPVYNrCaW3g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/es-errors": {
+      "version": "1.3.0",
+      "resolved": "https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz",
+      "integrity": "sha512-Zf5H2Kxt2xjTvbJvP2ZWLEICxA6j+hAmMzIlypy4xcBg1vKVnx89Wy0GbS+kf5cwCVFFzdCFh2XSCFNULS6csw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/es-object-atoms": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.1.tgz",
+      "integrity": "sha512-FGgH2h8zKNim9ljj7dankFPcICIK9Cp5bm+c2gQSYePhpaG5+esrLODihIorn+Pe6FGJzWhXQotPv73jTaldXA==",
+      "license": "MIT",
+      "dependencies": {
+        "es-errors": "^1.3.0"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/escape-html": {
+      "version": "1.0.3",
+      "resolved": "https://registry.npmjs.org/escape-html/-/escape-html-1.0.3.tgz",
+      "integrity": "sha512-NiSupZ4OeuGwr68lGIeym/ksIZMJodUGOSCZ/FSnTxcrekbvqrgdUxlJOMpijaKZVjAJrWrGs/6Jy8OMuyj9ow==",
+      "license": "MIT"
+    },
+    "node_modules/etag": {
+      "version": "1.8.1",
+      "resolved": "https://registry.npmjs.org/etag/-/etag-1.8.1.tgz",
+      "integrity": "sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/express": {
+      "version": "4.21.2",
+      "resolved": "https://registry.npmjs.org/express/-/express-4.21.2.tgz",
+      "integrity": "sha512-28HqgMZAmih1Czt9ny7qr6ek2qddF4FclbMzwhCREB6OFfH+rXAnuNCwo1/wFvrtbgsQDb4kSbX9de9lFbrXnA==",
+      "license": "MIT",
+      "dependencies": {
+        "accepts": "~1.3.8",
+        "array-flatten": "1.1.1",
+        "body-parser": "1.20.3",
+        "content-disposition": "0.5.4",
+        "content-type": "~1.0.4",
+        "cookie": "0.7.1",
+        "cookie-signature": "1.0.6",
+        "debug": "2.6.9",
+        "depd": "2.0.0",
+        "encodeurl": "~2.0.0",
+        "escape-html": "~1.0.3",
+        "etag": "~1.8.1",
+        "finalhandler": "1.3.1",
+        "fresh": "0.5.2",
+        "http-errors": "2.0.0",
+        "merge-descriptors": "1.0.3",
+        "methods": "~1.1.2",
+        "on-finished": "2.4.1",
+        "parseurl": "~1.3.3",
+        "path-to-regexp": "0.1.12",
+        "proxy-addr": "~2.0.7",
+        "qs": "6.13.0",
+        "range-parser": "~1.2.1",
+        "safe-buffer": "5.2.1",
+        "send": "0.19.0",
+        "serve-static": "1.16.2",
+        "setprototypeof": "1.2.0",
+        "statuses": "2.0.1",
+        "type-is": "~1.6.18",
+        "utils-merge": "1.0.1",
+        "vary": "~1.1.2"
+      },
+      "engines": {
+        "node": ">= 0.10.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/express"
+      }
+    },
+    "node_modules/fetch-blob": {
+      "version": "3.2.0",
+      "resolved": "https://registry.npmjs.org/fetch-blob/-/fetch-blob-3.2.0.tgz",
+      "integrity": "sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/jimmywarting"
+        },
+        {
+          "type": "paypal",
+          "url": "https://paypal.me/jimmywarting"
+        }
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "node-domexception": "^1.0.0",
+        "web-streams-polyfill": "^3.0.3"
+      },
+      "engines": {
+        "node": "^12.20 || >= 14.13"
+      }
+    },
+    "node_modules/finalhandler": {
+      "version": "1.3.1",
+      "resolved": "https://registry.npmjs.org/finalhandler/-/finalhandler-1.3.1.tgz",
+      "integrity": "sha512-6BN9trH7bp3qvnrRyzsBz+g3lZxTNZTbVO2EV1CS0WIcDbawYVdYvGflME/9QP0h0pYlCDBCTjYa9nZzMDpyxQ==",
+      "license": "MIT",
+      "dependencies": {
+        "debug": "2.6.9",
+        "encodeurl": "~2.0.0",
+        "escape-html": "~1.0.3",
+        "on-finished": "2.4.1",
+        "parseurl": "~1.3.3",
+        "statuses": "2.0.1",
+        "unpipe": "~1.0.0"
+      },
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/formdata-polyfill": {
+      "version": "4.0.10",
+      "resolved": "https://registry.npmjs.org/formdata-polyfill/-/formdata-polyfill-4.0.10.tgz",
+      "integrity": "sha512-buewHzMvYL29jdeQTVILecSaZKnt/RJWjoZCF5OW60Z67/GmSLBkOFM7qh1PI3zFNtJbaZL5eQu1vLfazOwj4g==",
+      "license": "MIT",
+      "dependencies": {
+        "fetch-blob": "^3.1.2"
+      },
+      "engines": {
+        "node": ">=12.20.0"
+      }
+    },
+    "node_modules/forwarded": {
+      "version": "0.2.0",
+      "resolved": "https://registry.npmjs.org/forwarded/-/forwarded-0.2.0.tgz",
+      "integrity": "sha512-buRG0fpBtRHSTCOASe6hD258tEubFoRLb4ZNA6NxMVHNw2gOcwHo9wyablzMzOA5z9xA9L1KNjk/Nt6MT9aYow==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/fresh": {
+      "version": "0.5.2",
+      "resolved": "https://registry.npmjs.org/fresh/-/fresh-0.5.2.tgz",
+      "integrity": "sha512-zJ2mQYM18rEFOudeV4GShTGIQ7RbzA7ozbU9I/XBpm7kqgMywgmylMwXHxZJmkVoYkna9d2pVXVXPdYTP9ej8Q==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/function-bind": {
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz",
+      "integrity": "sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/get-intrinsic": {
+      "version": "1.2.7",
+      "resolved": "https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.2.7.tgz",
+      "integrity": "sha512-VW6Pxhsrk0KAOqs3WEd0klDiF/+V7gQOpAvY1jVU/LHmaD/kQO4523aiJuikX/QAKYiW6x8Jh+RJej1almdtCA==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bind-apply-helpers": "^1.0.1",
+        "es-define-property": "^1.0.1",
+        "es-errors": "^1.3.0",
+        "es-object-atoms": "^1.0.0",
+        "function-bind": "^1.1.2",
+        "get-proto": "^1.0.0",
+        "gopd": "^1.2.0",
+        "has-symbols": "^1.1.0",
+        "hasown": "^2.0.2",
+        "math-intrinsics": "^1.1.0"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/get-proto": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz",
+      "integrity": "sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==",
+      "license": "MIT",
+      "dependencies": {
+        "dunder-proto": "^1.0.1",
+        "es-object-atoms": "^1.0.0"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/gopd": {
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz",
+      "integrity": "sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/has-symbols": {
+      "version": "1.1.0",
+      "resolved": "https://registry.npmjs.org/has-symbols/-/has-symbols-1.1.0.tgz",
+      "integrity": "sha512-1cDNdwJ2Jaohmb3sg4OmKaMBwuC48sYni5HUw2DvsC8LjGTLK9h+eb1X6RyuOHe4hT0ULCW68iomhjUoKUqlPQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/hasown": {
+      "version": "2.0.2",
+      "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.2.tgz",
+      "integrity": "sha512-0hJU9SCPvmMzIBdZFqNPXWa6dqh7WdH0cII9y+CyS8rG3nL48Bclra9HmKhVVUHyPWNH5Y7xDwAB7bfgSjkUMQ==",
+      "license": "MIT",
+      "dependencies": {
+        "function-bind": "^1.1.2"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/http-errors": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/http-errors/-/http-errors-2.0.0.tgz",
+      "integrity": "sha512-FtwrG/euBzaEjYeRqOgly7G0qviiXoJWnvEH2Z1plBdXgbyjv34pHTSb9zoeHMyDy33+DWy5Wt9Wo+TURtOYSQ==",
+      "license": "MIT",
+      "dependencies": {
+        "depd": "2.0.0",
+        "inherits": "2.0.4",
+        "setprototypeof": "1.2.0",
+        "statuses": "2.0.1",
+        "toidentifier": "1.0.1"
+      },
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/iconv-lite": {
+      "version": "0.4.24",
+      "resolved": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.4.24.tgz",
+      "integrity": "sha512-v3MXnZAcvnywkTUEZomIActle7RXXeedOR31wwl7VlyoXO4Qi9arvSenNQWne1TcRwhCL1HwLI21bEqdpj8/rA==",
+      "license": "MIT",
+      "dependencies": {
+        "safer-buffer": ">= 2.1.2 < 3"
+      },
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    "node_modules/inherits": {
+      "version": "2.0.4",
+      "resolved": "https://registry.npmjs.org/inherits/-/inherits-2.0.4.tgz",
+      "integrity": "sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==",
+      "license": "ISC"
+    },
+    "node_modules/ipaddr.js": {
+      "version": "1.9.1",
+      "resolved": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz",
+      "integrity": "sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.10"
+      }
+    },
+    "node_modules/math-intrinsics": {
+      "version": "1.1.0",
+      "resolved": "https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz",
+      "integrity": "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      }
+    },
+    "node_modules/media-typer": {
+      "version": "0.3.0",
+      "resolved": "https://registry.npmjs.org/media-typer/-/media-typer-0.3.0.tgz",
+      "integrity": "sha512-dq+qelQ9akHpcOl/gUVRTxVIOkAJ1wR3QAvb4RsVjS8oVoFjDGTc679wJYmUmknUF5HwMLOgb5O+a3KxfWapPQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/merge-descriptors": {
+      "version": "1.0.3",
+      "resolved": "https://registry.npmjs.org/merge-descriptors/-/merge-descriptors-1.0.3.tgz",
+      "integrity": "sha512-gaNvAS7TZ897/rVaZ0nMtAyxNyi/pdbjbAwUpFQpN70GqnVfOiXpeUUMKRBmzXaSQ8DdTX4/0ms62r2K+hE6mQ==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
+    "node_modules/methods": {
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/methods/-/methods-1.1.2.tgz",
+      "integrity": "sha512-iclAHeNqNm68zFtnZ0e+1L2yUIdvzNoauKU4WBA3VvH/vPFieF7qfRlwUZU+DA9P9bPXIS90ulxoUoCH23sV2w==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/mime": {
+      "version": "1.6.0",
+      "resolved": "https://registry.npmjs.org/mime/-/mime-1.6.0.tgz",
+      "integrity": "sha512-x0Vn8spI+wuJ1O6S7gnbaQg8Pxh4NNHb7KSINmEWKiPE4RKOplvijn+NkmYmmRgP68mc70j2EbeTFRsrswaQeg==",
+      "license": "MIT",
+      "bin": {
+        "mime": "cli.js"
+      },
+      "engines": {
+        "node": ">=4"
+      }
+    },
+    "node_modules/mime-db": {
+      "version": "1.52.0",
+      "resolved": "https://registry.npmjs.org/mime-db/-/mime-db-1.52.0.tgz",
+      "integrity": "sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/mime-types": {
+      "version": "2.1.35",
+      "resolved": "https://registry.npmjs.org/mime-types/-/mime-types-2.1.35.tgz",
+      "integrity": "sha512-ZDY+bPm5zTTF+YpCrAU9nK0UgICYPT0QtT1NZWFv4s++TNkcgVaT0g6+4R2uI4MjQjzysHB1zxuWL50hzaeXiw==",
+      "license": "MIT",
+      "dependencies": {
+        "mime-db": "1.52.0"
+      },
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/ms": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.0.0.tgz",
+      "integrity": "sha512-Tpp60P6IUJDTuOq/5Z8cdskzJujfwqfOTkrwIwj7IRISpnkJnT6SyJ4PCPnGMoFjC9ddhal5KVIYtAt97ix05A==",
+      "license": "MIT"
+    },
+    "node_modules/negotiator": {
+      "version": "0.6.3",
+      "resolved": "https://registry.npmjs.org/negotiator/-/negotiator-0.6.3.tgz",
+      "integrity": "sha512-+EUsqGPLsM+j/zdChZjsnX51g4XrHFOIXwfnCVPGlQk/k5giakcKsuxCObBRu6DSm9opw/O6slWbJdghQM4bBg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/node-domexception": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/node-domexception/-/node-domexception-1.0.0.tgz",
+      "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/jimmywarting"
+        },
+        {
+          "type": "github",
+          "url": "https://paypal.me/jimmywarting"
+        }
+      ],
+      "license": "MIT",
+      "engines": {
+        "node": ">=10.5.0"
+      }
+    },
+    "node_modules/node-fetch": {
+      "version": "3.3.2",
+      "resolved": "https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz",
+      "integrity": "sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==",
+      "license": "MIT",
+      "dependencies": {
+        "data-uri-to-buffer": "^4.0.0",
+        "fetch-blob": "^3.1.4",
+        "formdata-polyfill": "^4.0.10"
+      },
+      "engines": {
+        "node": "^12.20.0 || ^14.13.1 || >=16.0.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/node-fetch"
+      }
+    },
+    "node_modules/object-assign": {
+      "version": "4.1.1",
+      "resolved": "https://registry.npmjs.org/object-assign/-/object-assign-4.1.1.tgz",
+      "integrity": "sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    "node_modules/object-inspect": {
+      "version": "1.13.4",
+      "resolved": "https://registry.npmjs.org/object-inspect/-/object-inspect-1.13.4.tgz",
+      "integrity": "sha512-W67iLl4J2EXEGTbfeHCffrjDfitvLANg0UlX3wFUUSTx92KXRFegMHUVgSqE+wvhAbi4WqjGg9czysTV2Epbew==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/on-finished": {
+      "version": "2.4.1",
+      "resolved": "https://registry.npmjs.org/on-finished/-/on-finished-2.4.1.tgz",
+      "integrity": "sha512-oVlzkg3ENAhCk2zdv7IJwd/QUD4z2RxRwpkcGY8psCVcCYZNq4wYnVWALHM+brtuJjePWiYF/ClmuDr8Ch5+kg==",
+      "license": "MIT",
+      "dependencies": {
+        "ee-first": "1.1.1"
+      },
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/parseurl": {
+      "version": "1.3.3",
+      "resolved": "https://registry.npmjs.org/parseurl/-/parseurl-1.3.3.tgz",
+      "integrity": "sha512-CiyeOxFT/JZyN5m0z9PfXw4SCBJ6Sygz1Dpl0wqjlhDEGGBP1GnsUVEL0p63hoG1fcj3fHynXi9NYO4nWOL+qQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/path-to-regexp": {
+      "version": "0.1.12",
+      "resolved": "https://registry.npmjs.org/path-to-regexp/-/path-to-regexp-0.1.12.tgz",
+      "integrity": "sha512-RA1GjUVMnvYFxuqovrEqZoxxW5NUZqbwKtYz/Tt7nXerk0LbLblQmrsgdeOxV5SFHf0UDggjS/bSeOZwt1pmEQ==",
+      "license": "MIT"
+    },
+    "node_modules/proxy-addr": {
+      "version": "2.0.7",
+      "resolved": "https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.7.tgz",
+      "integrity": "sha512-llQsMLSUDUPT44jdrU/O37qlnifitDP+ZwrmmZcoSKyLKvtZxpyV0n2/bD/N4tBAAZ/gJEdZU7KMraoK1+XYAg==",
+      "license": "MIT",
+      "dependencies": {
+        "forwarded": "0.2.0",
+        "ipaddr.js": "1.9.1"
+      },
+      "engines": {
+        "node": ">= 0.10"
+      }
+    },
+    "node_modules/qs": {
+      "version": "6.13.0",
+      "resolved": "https://registry.npmjs.org/qs/-/qs-6.13.0.tgz",
+      "integrity": "sha512-+38qI9SOr8tfZ4QmJNplMUxqjbe7LKvvZgWdExBOmd+egZTtjLB67Gu0HRX3u/XOq7UU2Nx6nsjvS16Z9uwfpg==",
+      "license": "BSD-3-Clause",
+      "dependencies": {
+        "side-channel": "^1.0.6"
+      },
+      "engines": {
+        "node": ">=0.6"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/range-parser": {
+      "version": "1.2.1",
+      "resolved": "https://registry.npmjs.org/range-parser/-/range-parser-1.2.1.tgz",
+      "integrity": "sha512-Hrgsx+orqoygnmhFbKaHE6c296J+HTAQXoxEF6gNupROmmGJRoyzfG3ccAveqCBrwr/2yxQ5BVd/GTl5agOwSg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/raw-body": {
+      "version": "2.5.2",
+      "resolved": "https://registry.npmjs.org/raw-body/-/raw-body-2.5.2.tgz",
+      "integrity": "sha512-8zGqypfENjCIqGhgXToC8aB2r7YrBX+AQAfIPs/Mlk+BtPTztOvTS01NRW/3Eh60J+a48lt8qsCzirQ6loCVfA==",
+      "license": "MIT",
+      "dependencies": {
+        "bytes": "3.1.2",
+        "http-errors": "2.0.0",
+        "iconv-lite": "0.4.24",
+        "unpipe": "1.0.0"
+      },
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/safe-buffer": {
+      "version": "5.2.1",
+      "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz",
+      "integrity": "sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/feross"
+        },
+        {
+          "type": "patreon",
+          "url": "https://www.patreon.com/feross"
+        },
+        {
+          "type": "consulting",
+          "url": "https://feross.org/support"
+        }
+      ],
+      "license": "MIT"
+    },
+    "node_modules/safer-buffer": {
+      "version": "2.1.2",
+      "resolved": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz",
+      "integrity": "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==",
+      "license": "MIT"
+    },
+    "node_modules/send": {
+      "version": "0.19.0",
+      "resolved": "https://registry.npmjs.org/send/-/send-0.19.0.tgz",
+      "integrity": "sha512-dW41u5VfLXu8SJh5bwRmyYUbAoSB3c9uQh6L8h/KtsFREPWpbX1lrljJo186Jc4nmci/sGUZ9a0a0J2zgfq2hw==",
+      "license": "MIT",
+      "dependencies": {
+        "debug": "2.6.9",
+        "depd": "2.0.0",
+        "destroy": "1.2.0",
+        "encodeurl": "~1.0.2",
+        "escape-html": "~1.0.3",
+        "etag": "~1.8.1",
+        "fresh": "0.5.2",
+        "http-errors": "2.0.0",
+        "mime": "1.6.0",
+        "ms": "2.1.3",
+        "on-finished": "2.4.1",
+        "range-parser": "~1.2.1",
+        "statuses": "2.0.1"
+      },
+      "engines": {
+        "node": ">= 0.8.0"
+      }
+    },
+    "node_modules/send/node_modules/encodeurl": {
+      "version": "1.0.2",
+      "resolved": "https://registry.npmjs.org/encodeurl/-/encodeurl-1.0.2.tgz",
+      "integrity": "sha512-TPJXq8JqFaVYm2CWmPvnP2Iyo4ZSM7/QKcSmuMLDObfpH5fi7RUGmd/rTDf+rut/saiDiQEeVTNgAmJEdAOx0w==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/send/node_modules/ms": {
+      "version": "2.1.3",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+      "license": "MIT"
+    },
+    "node_modules/serve-static": {
+      "version": "1.16.2",
+      "resolved": "https://registry.npmjs.org/serve-static/-/serve-static-1.16.2.tgz",
+      "integrity": "sha512-VqpjJZKadQB/PEbEwvFdO43Ax5dFBZ2UECszz8bQ7pi7wt//PWe1P6MN7eCnjsatYtBT6EuiClbjSWP2WrIoTw==",
+      "license": "MIT",
+      "dependencies": {
+        "encodeurl": "~2.0.0",
+        "escape-html": "~1.0.3",
+        "parseurl": "~1.3.3",
+        "send": "0.19.0"
+      },
+      "engines": {
+        "node": ">= 0.8.0"
+      }
+    },
+    "node_modules/setprototypeof": {
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/setprototypeof/-/setprototypeof-1.2.0.tgz",
+      "integrity": "sha512-E5LDX7Wrp85Kil5bhZv46j8jOeboKq5JMmYM3gVGdGH8xFpPWXUMsNrlODCrkoxMEeNi/XZIwuRvY4XNwYMJpw==",
+      "license": "ISC"
+    },
+    "node_modules/side-channel": {
+      "version": "1.1.0",
+      "resolved": "https://registry.npmjs.org/side-channel/-/side-channel-1.1.0.tgz",
+      "integrity": "sha512-ZX99e6tRweoUXqR+VBrslhda51Nh5MTQwou5tnUDgbtyM0dBgmhEDtWGP/xbKn6hqfPRHujUNwz5fy/wbbhnpw==",
+      "license": "MIT",
+      "dependencies": {
+        "es-errors": "^1.3.0",
+        "object-inspect": "^1.13.3",
+        "side-channel-list": "^1.0.0",
+        "side-channel-map": "^1.0.1",
+        "side-channel-weakmap": "^1.0.2"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/side-channel-list": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/side-channel-list/-/side-channel-list-1.0.0.tgz",
+      "integrity": "sha512-FCLHtRD/gnpCiCHEiJLOwdmFP+wzCmDEkc9y7NsYxeF4u7Btsn1ZuwgwJGxImImHicJArLP4R0yX4c2KCrMrTA==",
+      "license": "MIT",
+      "dependencies": {
+        "es-errors": "^1.3.0",
+        "object-inspect": "^1.13.3"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/side-channel-map": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/side-channel-map/-/side-channel-map-1.0.1.tgz",
+      "integrity": "sha512-VCjCNfgMsby3tTdo02nbjtM/ewra6jPHmpThenkTYh8pG9ucZ/1P8So4u4FGBek/BjpOVsDCMoLA/iuBKIFXRA==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bound": "^1.0.2",
+        "es-errors": "^1.3.0",
+        "get-intrinsic": "^1.2.5",
+        "object-inspect": "^1.13.3"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/side-channel-weakmap": {
+      "version": "1.0.2",
+      "resolved": "https://registry.npmjs.org/side-channel-weakmap/-/side-channel-weakmap-1.0.2.tgz",
+      "integrity": "sha512-WPS/HvHQTYnHisLo9McqBHOJk2FkHO/tlpvldyrnem4aeQp4hai3gythswg6p01oSoTl58rcpiFAjF2br2Ak2A==",
+      "license": "MIT",
+      "dependencies": {
+        "call-bound": "^1.0.2",
+        "es-errors": "^1.3.0",
+        "get-intrinsic": "^1.2.5",
+        "object-inspect": "^1.13.3",
+        "side-channel-map": "^1.0.1"
+      },
+      "engines": {
+        "node": ">= 0.4"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/ljharb"
+      }
+    },
+    "node_modules/statuses": {
+      "version": "2.0.1",
+      "resolved": "https://registry.npmjs.org/statuses/-/statuses-2.0.1.tgz",
+      "integrity": "sha512-RwNA9Z/7PrK06rYLIzFMlaF+l73iwpzsqRIFgbMLbTcLD6cOao82TaWefPXQvB2fOC4AjuYSEndS7N/mTCbkdQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/toidentifier": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/toidentifier/-/toidentifier-1.0.1.tgz",
+      "integrity": "sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.6"
+      }
+    },
+    "node_modules/type-is": {
+      "version": "1.6.18",
+      "resolved": "https://registry.npmjs.org/type-is/-/type-is-1.6.18.tgz",
+      "integrity": "sha512-TkRKr9sUTxEH8MdfuCSP7VizJyzRNMjj2J2do2Jr3Kym598JVdEksuzPQCnlFPW4ky9Q+iA+ma9BGm06XQBy8g==",
+      "license": "MIT",
+      "dependencies": {
+        "media-typer": "0.3.0",
+        "mime-types": "~2.1.24"
+      },
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/unpipe": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/unpipe/-/unpipe-1.0.0.tgz",
+      "integrity": "sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/utils-merge": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/utils-merge/-/utils-merge-1.0.1.tgz",
+      "integrity": "sha512-pMZTvIkT1d+TFGvDOqodOclx0QWkkgi6Tdoa8gC8ffGAAqz9pzPTZWAybbsHHoED/ztMtkv/VoYTYyShUn81hA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.4.0"
+      }
+    },
+    "node_modules/vary": {
+      "version": "1.1.2",
+      "resolved": "https://registry.npmjs.org/vary/-/vary-1.1.2.tgz",
+      "integrity": "sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 0.8"
+      }
+    },
+    "node_modules/web-streams-polyfill": {
+      "version": "3.3.3",
+      "resolved": "https://registry.npmjs.org/web-streams-polyfill/-/web-streams-polyfill-3.3.3.tgz",
+      "integrity": "sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 8"
+      }
+    }
+  }
+}
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/package.json ---
+{
+  "name": "ollama-cors-proxy",
+  "version": "1.0.0",
+  "description": "CORS proxy for Ollama API",
+  "type": "module",
+  "scripts": {
+    "proxy": "node proxy.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "node-fetch": "^3.3.2"
+  }
+}
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/setup-ollama.sh ---
+#!/bin/bash
+
+# Get the absolute path of the script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Create nginx configuration
+cat > "$SCRIPT_DIR/ollama.conf" << 'EOL'
+server {
+    listen 11435;
+    
+    location / {
+        proxy_pass http://localhost:11434;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        
+        # CORS headers
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'Content-Type' always;
+        
+        # Handle preflight requests
+        if ($request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*';
+            add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
+            add_header 'Access-Control-Allow-Headers' 'Content-Type';
+            add_header 'Access-Control-Max-Age' 1728000;
+            add_header 'Content-Type' 'text/plain charset=UTF-8';
+            add_header 'Content-Length' 0;
+            return 204;
+        }
+    }
+}
+EOL
+
+# Check if nginx is installed
+if ! command -v nginx &> /dev/null; then
+    echo "nginx not found. Installing..."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        brew install nginx
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Linux
+        sudo apt-get update
+        sudo apt-get install -y nginx
+    fi
+fi
+
+# Create nginx sites directory if it doesn't exist
+NGINX_SITES_DIR="$HOME/.config/nginx/sites"
+mkdir -p "$NGINX_SITES_DIR"
+
+# Copy configuration
+cp "$SCRIPT_DIR/ollama.conf" "$NGINX_SITES_DIR/"
+
+# Create nginx configuration to include our site
+cat > "$HOME/.config/nginx/nginx.conf" << EOL
+worker_processes 1;
+events {
+    worker_connections 1024;
+}
+http {
+    include mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 65;
+    include sites/*.conf;
+}
+EOL
+
+# Start nginx
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    brew services restart nginx
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    # Linux
+    sudo systemctl restart nginx
+fi
+
+echo "CORS proxy setup complete! Ollama API is now available at http://localhost:11435"
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/analyze.js ---
+import { getFilenameFromImage } from './llava_integration.js';
+
+/**
+ * Analyzes an image URL to generate a descriptive filename using AI.
+ * @param {string} imageUrl - The URL of the image to analyze.
+ * @returns {Promise<string>} - The generated filename.
+ */
+export async function analyzeImage(imageUrl) {
+    return await getFilenameFromImage(imageUrl);
+}
+
+
+--- /Users/danielkliewer/chrome-ai-filename-generator/api/cors-proxy.js ---
+#!/usr/bin/env node
+
+import express from 'express';
+import cors from 'cors';
+import fetch from 'node-fetch';
+
+const app = express();
+const port = 11435;
+
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Origin', 'Accept'],
+    credentials: true
+}));
+
+// Handle preflight requests
+app.options('*', cors());
+
+app.use(express.json());
+
+// Handle version check
+app.get('/api/version', async (req, res) => {
+    try {
+        const response = await fetch('http://localhost:11434/api/version');
+        const data = await response.text();
+        res.send(data);
+    } catch (error) {
+        console.error('Version check error:', error);
+        res.status(500).json({ 
+            error: true, 
+            message: error.message 
+        });
+    }
+});
+
+// Handle all other API requests
+app.all('/api/*', async (req, res) => {
+    try {
+        const ollamaUrl = 'http://localhost:11434' + req.path;
+        
+        const response = await fetch(ollamaUrl, {
+            method: req.method,
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: ['POST', 'PUT', 'PATCH'].includes(req.method) 
+                ? JSON.stringify(req.body) 
+                : undefined
+        });
+
+        const data = await response.text();
+        
+        // Forward response headers
+        Object.entries(response.headers.raw()).forEach(([key, value]) => {
+            res.setHeader(key, value);
+        });
+
+        // Add CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', '*');
+
+        res.status(response.status).send(data);
+    } catch (error) {
+        console.error('Proxy error:', error);
+        res.status(500).json({ 
+            error: true, 
+            message: error.message 
+        });
+    }
+});
+
+app.listen(port, () => {
+    console.log(`CORS proxy server running on port ${port}`);
+});
+
+// Handle process signals
+process.on('SIGINT', () => {
+    console.log('Shutting down proxy server');
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    console.log('Shutting down proxy server');
+    process.exit(0);
+});
+
+

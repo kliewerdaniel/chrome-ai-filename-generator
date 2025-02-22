@@ -1,0 +1,38 @@
+<!-- popup/popup.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="status-panel">
+        <h3>Service Status</h3>
+        <div class="status-item">
+            <span>Ollama:</span>
+            <span id="ollamaStatus" class="status">Checking...</span>
+        </div>
+        <div class="status-item">
+            <span>Proxy Server:</span>
+            <span id="proxyStatus" class="status">Checking...</span>
+        </div>
+        <button id="toggleProxy" class="button">Start Proxy</button>
+    </div>
+
+    <div id="imagePreviewContainer" style="display: none;">
+        <img id="imagePreview" alt="Selected image">
+    </div>
+
+    <div id="filenamePreview">
+        <h3>Filename Preview</h3>
+        <input type="text" id="previewFilename" readonly>
+    </div>
+
+    <div class="button-container">
+        <button id="generateButton">Generate Filename</button>
+        <button id="saveButton">Save Download</button>
+    </div>
+
+    <div id="errorMessage" class="error-message" style="display: none;"></div>
+    <script src="popup.js" type="module"></script>
+</body>
+</html>

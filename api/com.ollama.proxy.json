@@ -1,0 +1,9 @@
+{
+  "name": "com.ollama.proxy",
+  "description": "Native messaging host for Ollama CORS proxy",
+  "path": "proxy-host.js",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://*"
+  ]
+}
